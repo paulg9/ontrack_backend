@@ -1,4 +1,5 @@
 import { Collection, Db } from "npm:mongodb";
+import { GoogleGenerativeAI } from "npm:@google/generative-ai";
 import { freshID } from "@utils/database.ts";
 import { Empty, ID } from "@utils/types.ts";
 
@@ -51,8 +52,6 @@ const MAX_CUES_LENGTH = 400;
 const MAX_URL_LENGTH = 2048;
 const FREQ_MIN = 0;
 const FREQ_MAX = 14;
-const GEMINI_ENDPOINT =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent";
 
 // Module-level helpers (not exposed as HTTP endpoints)
 function isNonEmpty(value: unknown): value is string {
@@ -118,31 +117,16 @@ Guidelines:
 `;
 }
 
-function extractTextFromGeminiResponse(resp: any): string | undefined {
-  const candidates = resp?.candidates;
-  if (!Array.isArray(candidates)) return undefined;
-  for (const candidate of candidates) {
-    const parts = candidate?.content?.parts ?? candidate?.parts ?? [];
-    if (Array.isArray(parts)) {
-      for (const part of parts) {
-        if (typeof part?.text === "string" && part.text.trim().length > 0) {
-          return part.text;
-        }
-      }
-    }
-    if (
-      typeof candidate?.text === "string" && candidate.text.trim().length > 0
-    ) {
-      return candidate.text;
-    }
-    if (
-      typeof candidate?.output === "string" &&
-      candidate.output.trim().length > 0
-    ) {
-      return candidate.output;
-    }
+function stripCodeFence(output: string): string {
+  const trimmed = output.trim();
+  if (trimmed.startsWith("```")) {
+    const withoutFence = trimmed.replace(/^```[a-zA-Z]*\s*/, "").replace(
+      /```\s*$/,
+      "",
+    );
+    return withoutFence.trim();
   }
-  return undefined;
+  return trimmed;
 }
 
 export interface ExerciseLibraryLLMClient {
@@ -150,54 +134,40 @@ export interface ExerciseLibraryLLMClient {
 }
 
 class GeminiLLMClient implements ExerciseLibraryLLMClient {
+  constructor(
+    private readonly modelId: string = Deno.env.get("GEMINI_MODEL") ??
+      "gemini-2.0-flash",
+  ) {}
+
   async generateProposal(prompt: string): Promise<string> {
     const apiKey = Deno.env.get("GEMINI_API_KEY");
     if (!apiKey) {
-      throw new Error("GEMINI_API_KEY not configured on the server");
+      throw new Error("GEMINI_API_KEY not configured on the server.");
     }
 
-    let response: Response;
     try {
-      response = await fetch(`${GEMINI_ENDPOINT}?key=${apiKey}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [{ text: prompt }],
-            },
-          ],
-        }),
+      const genAI = new GoogleGenerativeAI(apiKey);
+      const model = genAI.getGenerativeModel({
+        model: this.modelId,
+        generationConfig: {
+          maxOutputTokens: 1024,
+          temperature: 0.2,
+        },
       });
+      const result = await model.generateContent(prompt);
+      const response = await result.response;
+      const text = response.text();
+      if (!text || text.trim().length === 0) {
+        throw new Error("Gemini returned an empty response.");
+      }
+      return text;
     } catch (err) {
       throw new Error(
-        `Failed to reach Gemini: ${
+        `Gemini request failed: ${
           err instanceof Error ? err.message : String(err)
         }`,
       );
     }
-
-    let payload: any;
-    try {
-      payload = await response.json();
-    } catch (err) {
-      throw new Error(
-        `Unable to parse Gemini response: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
-    }
-
-    if (!response.ok) {
-      const detail = payload?.error?.message ?? JSON.stringify(payload);
-      throw new Error(`Gemini API error (${response.status}): ${detail}`);
-    }
-
-    const text = extractTextFromGeminiResponse(payload);
-    if (!text || text.trim().length === 0) {
-      throw new Error("Gemini response did not contain any text output.");
-    }
-    return text;
   }
 }
 
@@ -408,7 +378,8 @@ export default class ExerciseLibraryConcept {
       return { error: err instanceof Error ? err.message : String(err) };
     }
 
-    const match = llmResponse.match(/\{[\s\S]*\}/);
+    const cleaned = stripCodeFence(llmResponse);
+    const match = cleaned.match(/\{[\s\S]*\}/);
     if (!match) {
       console.error("Gemini output missing JSON:", llmResponse);
       return { error: "Gemini response did not contain a JSON object." };

@@ -20,6 +20,10 @@
     composes the fixed Gemini prompt from the current exercise data, calls
     Gemini using `GEMINI_API_KEY`, and stores the resulting JSON as a pending
     proposal, returning the normalized details alongside the proposal id.
+  - The runtime implementation uses Google's official `@google/generative-ai`
+    client (model defaults to `gemini-2.0-flash`). Tests inject a stubbed
+    `ExerciseLibraryLLMClient`, so no manual `llmText` overrides are needed
+    anywhere.
   - Kept the proposal records and explicit apply/discard actions. No exercise
     changes occur until `applyDetails`.
 
