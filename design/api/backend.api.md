@@ -562,6 +562,29 @@ Success Response Body:
 { "summaryId": "ID", "newStreakCount": 0, "newCompletion7d": 0 }
 ```
 
+### POST /api/Feedback/recordCompletion
+
+Description: Update the summary when a day’s exercises are marked complete.
+Effects:
+
+- Creates a Summary if missing; updates streak and seven-day completion window
+
+Request Body:
+
+```json
+{
+  "owner": "ID",
+  "date": "ISO-8601 string",
+  "completedAll": true
+}
+```
+
+Success Response Body:
+
+```json
+{ "summaryId": "ID", "streakCount": 0, "completion7d": 0.0 }
+```
+
 ### POST /api/Feedback/recordMessage
 
 Description: Record a message for a user. Requirements:
@@ -912,4 +935,49 @@ Success Response Body:
 
 ```json
 {}
+```
+
+### POST /api/UserAccount/_listShareLinks
+
+Description: List share links owned by a user (including expired ones). Request
+Body:
+
+```json
+{ "owner": "ID" }
+```
+
+Success Response Body (Query):
+
+```json
+[
+  {
+    "shareLink": "ID",
+    "token": "string",
+    "expiry": "ISO-8601",
+    "expired": false
+  }
+]
+```
+
+### POST /api/UserAccount/_resolveShareLink
+
+Description: Resolve a share link token to its owner and expiry metadata.
+
+Request Body:
+
+```json
+{ "token": "string" }
+```
+
+Success Response Body (Query):
+
+```json
+[
+  {
+    "owner": "ID",
+    "ownerUsername": "string|null",
+    "expiresAt": "ISO-8601",
+    "expired": false
+  }
+]
 ```

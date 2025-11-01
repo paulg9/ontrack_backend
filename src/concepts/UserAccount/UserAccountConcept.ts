@@ -41,6 +41,13 @@ interface ShareLinkDoc {
   owner: User; // The ID of the user who created this share link
 }
 
+interface ShareLinkListEntry {
+  shareLink: ShareLink;
+  token: string;
+  expiry: string;
+  expired: boolean;
+}
+
 /**
  * Interface representing a Session document.
  * Corresponds to: a set of Sessions with user, token, createdAt, expiry.
@@ -78,7 +85,7 @@ export default class UserAccountConcept {
     this.users = this.db.collection(PREFIX + "users");
     this.shareLinks = this.db.collection(PREFIX + "shareLinks");
     this.sessions = this.db.collection(PREFIX + "sessions");
-    
+
     // Create unique index on username field to enforce uniqueness at database level
     this.users.createIndex({ username: 1 }, { unique: true }).catch(() => {
       // Index creation might fail if it already exists, which is fine
@@ -97,8 +104,12 @@ export default class UserAccountConcept {
    * @returns A Promise resolving to an object with the new user's ID on success, or an error message.
    */
   async register(
-    { username, password, isAdmin }: { username: string; password: string; isAdmin?: boolean },
-  ): Promise<{ user: User; } | { error: string; }> {
+    { username, password, isAdmin }: {
+      username: string;
+      password: string;
+      isAdmin?: boolean;
+    },
+  ): Promise<{ user: User } | { error: string }> {
     // DANGER: Plaintext password. In a real app, use a strong hashing library like bcrypt.
     const passwordHash = password; // Placeholder for actual hash
 
@@ -136,8 +147,8 @@ export default class UserAccountConcept {
    * @returns A Promise resolving to an empty object on success, or an error message.
    */
   async setReminderTime(
-    { user, time }: { user: User; time: TimeOfDay; },
-  ): Promise<Empty | { error: string; }> {
+    { user, time }: { user: User; time: TimeOfDay },
+  ): Promise<Empty | { error: string }> {
     // Check if user exists
     const existingUser = await this.users.findOne({ _id: user });
     if (!existingUser) {
@@ -166,8 +177,8 @@ export default class UserAccountConcept {
    * @returns A Promise resolving to an object with the generated token on success, or an error message.
    */
   async createShareLink(
-    { owner, ttlSeconds }: { owner: User; ttlSeconds: number; },
-  ): Promise<{ token: string; } | { error: string; }> {
+    { owner, ttlSeconds }: { owner: User; ttlSeconds: number },
+  ): Promise<{ token: string } | { error: string }> {
     // Check if owner exists
     const existingUser = await this.users.findOne({ _id: owner });
     if (!existingUser) {
@@ -214,12 +225,12 @@ export default class UserAccountConcept {
    * @returns A Promise resolving to an empty object on success, or an error message.
    */
   async revokeShareLink(
-    { owner, token }: { owner: User; token: string; },
-  ): Promise<Empty | { error: string; }> {
+    { owner, token }: { owner: User; token: string },
+  ): Promise<Empty | { error: string }> {
     // 1. Find and delete the ShareLink in one atomic operation
-    const result = await this.shareLinks.findOneAndDelete({ 
+    const result = await this.shareLinks.findOneAndDelete({
       token: token,
-      owner: owner // Check for token AND owner at the database level
+      owner: owner, // Check for token AND owner at the database level
     });
 
     // The result of findOneAndDelete is the document that was deleted, or null if nothing was found.
@@ -228,7 +239,9 @@ export default class UserAccountConcept {
     if (!shareLinkToRevoke) {
       // This error covers all failure cases: token doesn't exist, or it doesn't belong to this owner.
       // This is more secure as it doesn't reveal which case it was.
-      return { error: "ShareLink not found or you do not have permission to revoke it" };
+      return {
+        error: "ShareLink not found or you do not have permission to revoke it",
+      };
     }
 
     // 2. If deletion was successful, remove the link from the user's document.
@@ -307,7 +320,8 @@ export default class UserAccountConcept {
     { token }: { token: string },
   ): Promise<Array<{ signedIn: boolean }> | { error: string }> {
     const session = await this.sessions.findOne({ token });
-    const valid = !!session && (!session.expiry || session.expiry.getTime() >= Date.now());
+    const valid = !!session &&
+      (!session.expiry || session.expiry.getTime() >= Date.now());
     return [{ signedIn: valid }];
   }
 
@@ -321,5 +335,48 @@ export default class UserAccountConcept {
     if (!u) return { error: "User not found" };
     return [{ isAdmin: !!u.isAdmin }];
   }
-}
 
+  async _listShareLinks(
+    { owner }: { owner: User },
+  ): Promise<ShareLinkListEntry[] | { error: string }> {
+    const user = await this.users.findOne({ _id: owner });
+    if (!user) {
+      return { error: "User not found" };
+    }
+
+    const links = await this.shareLinks.find({ owner }).sort({ expiry: 1 })
+      .toArray();
+    const now = Date.now();
+    return links.map((link) => ({
+      shareLink: link._id,
+      token: link.token,
+      expiry: link.expiry.toISOString(),
+      expired: link.expiry.getTime() < now,
+    }));
+  }
+
+  async _resolveShareLink(
+    { token }: { token: string },
+  ): Promise<
+    Array<
+      {
+        owner: User;
+        ownerUsername: string | null;
+        expiresAt: string;
+        expired: boolean;
+      }
+    >
+  > {
+    const link = await this.shareLinks.findOne({ token });
+    if (!link) return [];
+
+    const ownerDoc = await this.users.findOne({ _id: link.owner });
+    const expired = link.expiry.getTime() < Date.now();
+    return [{
+      owner: link.owner,
+      ownerUsername: ownerDoc?.username ?? null,
+      expiresAt: link.expiry.toISOString(),
+      expired,
+    }];
+  }
+}

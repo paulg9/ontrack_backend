@@ -35,6 +35,8 @@ interface SummaryDocument {
   streakCount: number; // Stored as a number.
   completion7d: number; // Ratio is typically represented as a number between 0.0 and 1.0.
   lastReminderDate?: Date; // Optional, as it might not be set until a reminder is sent.
+  lastCompletedDate?: string; // YYYY-MM-DD string of most recent completed day
+  recentCompletedDates: string[]; // Sliding window of recent completion dates (YYYY-MM-DD)
 }
 
 /**
@@ -59,6 +61,31 @@ interface MessageDocument {
   timestamp: Date; // DateTime from spec mapped to JS Date object.
   kind: MessageKind;
   text: string;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function toDateKey(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function parseDateKey(key: string): Date {
+  return new Date(`${key}T00:00:00.000Z`);
+}
+
+function daysBetweenKeys(previous: string, current: string): number {
+  const prev = parseDateKey(previous).getTime();
+  const curr = parseDateKey(current).getTime();
+  return Math.round((curr - prev) / DAY_MS);
+}
+
+function pruneRecentDates(dates: string[], reference: Date): string[] {
+  const refTime = reference.getTime();
+  const unique = Array.from(new Set(dates));
+  return unique.filter((key) => {
+    const diff = Math.floor((refTime - parseDateKey(key).getTime()) / DAY_MS);
+    return diff >= 0 && diff <= 6;
+  }).sort();
 }
 
 export default class FeedbackConcept {
@@ -101,7 +128,11 @@ export default class FeedbackConcept {
       newStreakCount: number;
       newCompletion7d: number;
     },
-  ): Promise<{ summaryId: Summary; newStreakCount: number; newCompletion7d: number } | { error: string }> {
+  ): Promise<
+    { summaryId: Summary; newStreakCount: number; newCompletion7d: number } | {
+      error: string;
+    }
+  > {
     try {
       const result = await this.summaries.findOneAndUpdate(
         { owner: owner }, // Filter: find summary for this owner
@@ -115,11 +146,12 @@ export default class FeedbackConcept {
             owner: owner,
             // lastReminderDate remains undefined on initial creation,
             // will be set by sendReminder action
+            recentCompletedDates: [],
           },
         },
         {
           upsert: true, // Create a new document if no match is found
-          returnDocument: 'after', // Return the modified document rather than the original
+          returnDocument: "after", // Return the modified document rather than the original
         },
       );
 
@@ -136,11 +168,18 @@ export default class FeedbackConcept {
       } else {
         // This case should ideally not be reached with upsert: true and returnDocument: 'after',
         // but included for robust error handling.
-        return { error: `Failed to upsert summary for owner ${owner}. No document returned after operation.` };
+        return {
+          error:
+            `Failed to upsert summary for owner ${owner}. No document returned after operation.`,
+        };
       }
     } catch (e) {
       console.error(`Error recomputing feedback for owner ${owner}:`, e);
-      return { error: `Database error during recompute: ${e instanceof Error ? e.message : String(e)}` };
+      return {
+        error: `Database error during recompute: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      };
     }
   }
 
@@ -185,12 +224,128 @@ export default class FeedbackConcept {
         return { messageId: newMessage._id };
       } else {
         // This case indicates an issue with the MongoDB operation, even if no error was thrown.
-        return { error: `Failed to insert message for owner ${owner}. Database operation not acknowledged.` };
+        return {
+          error:
+            `Failed to insert message for owner ${owner}. Database operation not acknowledged.`,
+        };
       }
     } catch (e) {
       console.error(`Error recording message for owner ${owner}:`, e);
-      return { error: `Database error during recordMessage: ${e instanceof Error ? e.message : String(e)}` };
+      return {
+        error: `Database error during recordMessage: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      };
     }
+  }
+
+  async recordCompletion(
+    { owner, date, completedAll }: {
+      owner: User;
+      date: Date;
+      completedAll: boolean;
+    },
+  ): Promise<
+    { summaryId: Summary; streakCount: number; completion7d: number } | {
+      error: string;
+    }
+  > {
+    const dateKey = toDateKey(date);
+    const existing = await this.summaries.findOne({ owner });
+
+    if (!existing) {
+      const streakCount = completedAll ? 1 : 0;
+      const completion7d = completedAll ? 1 / 7 : 0;
+      const summary: SummaryDocument = {
+        _id: freshID() as Summary,
+        owner,
+        streakCount,
+        completion7d,
+        recentCompletedDates: completedAll ? [dateKey] : [],
+      };
+      if (completedAll) {
+        summary.lastCompletedDate = dateKey;
+      }
+      await this.summaries.insertOne(summary);
+      return {
+        summaryId: summary._id,
+        streakCount: summary.streakCount,
+        completion7d: summary.completion7d,
+      };
+    }
+
+    let recentDates = existing.recentCompletedDates ?? [];
+    recentDates = pruneRecentDates(recentDates, date);
+
+    if (completedAll) {
+      if (!recentDates.includes(dateKey)) {
+        recentDates.push(dateKey);
+        recentDates.sort();
+      }
+    } else {
+      recentDates = recentDates.filter((key) => key !== dateKey);
+    }
+
+    const completion7d = Math.min(1, recentDates.length / 7);
+
+    let streakCount = existing.streakCount ?? 0;
+    if (completedAll) {
+      if (existing.lastCompletedDate) {
+        const diff = daysBetweenKeys(existing.lastCompletedDate, dateKey);
+        if (diff === 1) {
+          streakCount = streakCount + 1;
+        } else if (diff === 0) {
+          // same day — keep streak as-is
+        } else {
+          streakCount = 1;
+        }
+      } else {
+        streakCount = 1;
+      }
+    } else {
+      // Missed completion resets the streak
+      streakCount = 0;
+    }
+
+    const latestCompleted = recentDates.length > 0
+      ? recentDates[recentDates.length - 1]
+      : undefined;
+
+    let newLastCompletedDate: string | undefined = existing.lastCompletedDate;
+    if (completedAll) {
+      newLastCompletedDate = dateKey;
+    } else {
+      if (existing.lastCompletedDate === dateKey) {
+        newLastCompletedDate = latestCompleted;
+      } else if (
+        existing.lastCompletedDate &&
+        !recentDates.includes(existing.lastCompletedDate)
+      ) {
+        newLastCompletedDate = latestCompleted;
+      }
+    }
+
+    const updatePayload: Partial<SummaryDocument> = {
+      streakCount,
+      completion7d,
+      recentCompletedDates: recentDates,
+    };
+    if (newLastCompletedDate) {
+      updatePayload.lastCompletedDate = newLastCompletedDate;
+    }
+
+    const updateOps: Record<string, unknown> = { $set: updatePayload };
+    if (!newLastCompletedDate) {
+      updateOps.$unset = { lastCompletedDate: "" };
+    }
+
+    await this.summaries.updateOne({ _id: existing._id }, updateOps);
+
+    return {
+      summaryId: existing._id,
+      streakCount,
+      completion7d,
+    };
   }
 
   /**
@@ -208,20 +363,27 @@ export default class FeedbackConcept {
    * @returns A promise resolving to an empty object `{}` on success,
    *          or an `{ error: string }` object if preconditions are not met or an error occurs.
    */
-  async sendReminder({ owner }: { owner: User }): Promise<Empty | { error: string }> {
+  async sendReminder(
+    { owner }: { owner: User },
+  ): Promise<Empty | { error: string }> {
     try {
       // 1. Validate 'owner exists' and that a summary exists for the owner (precondition check).
       // The action modifies the owner's summary, so an existing summary is required.
       const existingSummary = await this.summaries.findOne({ owner: owner });
       if (!existingSummary) {
-        return { error: `Precondition failed: Summary for owner ${owner} does not exist.` };
+        return {
+          error:
+            `Precondition failed: Summary for owner ${owner} does not exist.`,
+        };
       }
 
       const currentDateTime = new Date(); // Get the current date and time for setting `lastReminderDate`
 
       // 2. Simulate "out-of-band reminder delivery".
       // In a real application, this would involve calling an external notification service.
-      console.log(`[SYSTEM ACTION] Delivering out-of-band reminder to owner ${owner} at ${currentDateTime.toISOString()}`);
+      console.log(
+        `[SYSTEM ACTION] Delivering out-of-band reminder to owner ${owner} at ${currentDateTime.toISOString()}`,
+      );
       // Example of external call: await this.notificationService.sendNotification(owner, "Don't forget to check in!");
 
       // 3. Record a reminder Message for `owner`.
@@ -232,7 +394,10 @@ export default class FeedbackConcept {
       });
       if ("error" in recordMessageResult) {
         // If recording the message fails, the overall action fails
-        return { error: `Failed to record reminder message for owner ${owner}: ${recordMessageResult.error}` };
+        return {
+          error:
+            `Failed to record reminder message for owner ${owner}: ${recordMessageResult.error}`,
+        };
       }
 
       // 4. Update `owner`'s Summary to set `lastReminderDate` to today's date.
@@ -246,15 +411,24 @@ export default class FeedbackConcept {
       if (updateResult.modifiedCount === 0) {
         // This scenario implies a race condition or a deeper issue, as the summary was found
         // but not modified.
-        return { error: `Failed to update lastReminderDate for owner ${owner}. Summary found but not modified.` };
+        return {
+          error:
+            `Failed to update lastReminderDate for owner ${owner}. Summary found but not modified.`,
+        };
       }
 
-      console.log(`Updated lastReminderDate for owner ${owner} to ${currentDateTime.toDateString()}.`);
+      console.log(
+        `Updated lastReminderDate for owner ${owner} to ${currentDateTime.toDateString()}.`,
+      );
 
       return {}; // Success, return an empty object as specified
     } catch (e) {
       console.error(`Error in sendReminder for owner ${owner}:`, e);
-      return { error: `Database or system error during sendReminder: ${e instanceof Error ? e.message : String(e)}` };
+      return {
+        error: `Database or system error during sendReminder: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      };
     }
   }
 
@@ -272,7 +446,9 @@ export default class FeedbackConcept {
    */
   async _getSummaryMetrics(
     { owner }: { owner: User },
-  ): Promise<Array<{ streakCount: number; completion7d: number }> | { error: string }> {
+  ): Promise<
+    Array<{ streakCount: number; completion7d: number }> | { error: string }
+  > {
     try {
       // 1. Find the SummaryDocument for the given `owner`.
       const summary = await this.summaries.findOne({ owner: owner });
@@ -282,15 +458,25 @@ export default class FeedbackConcept {
         console.log(
           `Retrieved summary metrics for owner ${owner}: Streak ${summary.streakCount}, Completion ${summary.completion7d}`,
         );
-        return [{ streakCount: summary.streakCount, completion7d: summary.completion7d }];
+        return [{
+          streakCount: summary.streakCount,
+          completion7d: summary.completion7d,
+        }];
       } else {
         // 3. If not found (precondition violation), return `{ error: "Summary for owner X does not exist." }`.
-        return { error: `Precondition failed: Summary for owner ${owner} does not exist.` };
+        return {
+          error:
+            `Precondition failed: Summary for owner ${owner} does not exist.`,
+        };
       }
     } catch (e) {
       // 4. Handle potential database errors.
       console.error(`Error retrieving summary metrics for owner ${owner}:`, e);
-      return { error: `Database error during _getSummaryMetrics: ${e instanceof Error ? e.message : String(e)}` };
+      return {
+        error: `Database error during _getSummaryMetrics: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      };
     }
   }
 
@@ -317,7 +503,8 @@ export default class FeedbackConcept {
       // 2. If found, compare `summary.lastReminderDate` (if it exists) with the provided `date`.
       //    Use `toDateString()` for date-only comparison to ignore time components.
       if (summary) {
-        const sentToday = summary.lastReminderDate?.toDateString() === date.toDateString();
+        const sentToday =
+          summary.lastReminderDate?.toDateString() === date.toDateString();
         console.log(
           `Checked if reminder sent today for owner ${owner} (date: ${date.toDateString()}): ${sentToday}`,
         );
@@ -325,12 +512,22 @@ export default class FeedbackConcept {
         return [{ sent: sentToday }];
       } else {
         // 4. If not found (precondition violation), return `{ error: "Summary for owner X does not exist." }`.
-        return { error: `Precondition failed: Summary for owner ${owner} does not exist.` };
+        return {
+          error:
+            `Precondition failed: Summary for owner ${owner} does not exist.`,
+        };
       }
     } catch (e) {
       // 5. Handle potential database errors.
-      console.error(`Error checking for reminder sent today for owner ${owner}:`, e);
-      return { error: `Database error during _hasSentReminderToday: ${e instanceof Error ? e.message : String(e)}` };
+      console.error(
+        `Error checking for reminder sent today for owner ${owner}:`,
+        e,
+      );
+      return {
+        error: `Database error during _hasSentReminderToday: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      };
     }
   }
 
@@ -341,7 +538,7 @@ export default class FeedbackConcept {
   async _listMessages(
     { owner }: { owner: User },
   ): Promise<MessageDocument[]> {
-    return await this.messages.find({ owner }).sort({ timestamp: -1 }).toArray();
+    return await this.messages.find({ owner }).sort({ timestamp: -1 })
+      .toArray();
   }
 }
-

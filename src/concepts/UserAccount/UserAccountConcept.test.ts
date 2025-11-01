@@ -1,10 +1,17 @@
-import { testDb, freshID } from "@utils/database.ts";
-import { assertEquals, assertExists, assert, assertNotEquals } from "jsr:@std/assert";
+import { freshID, testDb } from "@utils/database.ts";
+import {
+  assert,
+  assertEquals,
+  assertExists,
+  assertNotEquals,
+} from "jsr:@std/assert";
 import UserAccountConcept from "./UserAccountConcept.ts";
 import { ID } from "@utils/types.ts";
 
 // Helper to check if a result is an error object
-function isError<T>(result: T | { error: string }): result is { error: string } {
+function isError<T>(
+  result: T | { error: string },
+): result is { error: string } {
   return (result as { error: string }).error !== undefined;
 }
 
@@ -14,8 +21,13 @@ Deno.test("Operational Principle: A user registers, manages settings, and shares
   const concept = new UserAccountConcept(db);
 
   // 1. An athlete registers for an account
-  console.log("  ➡️  Action: register({ username: 'athlete1', password: 'password123' })");
-  const registerResult = await concept.register({ username: "athlete1", password: "password123" });
+  console.log(
+    "  ➡️  Action: register({ username: 'athlete1', password: 'password123' })",
+  );
+  const registerResult = await concept.register({
+    username: "athlete1",
+    password: "password123",
+  });
   console.log("  ⬅️  Result:", registerResult);
 
   assert(!isError(registerResult), "Registration should succeed");
@@ -29,12 +41,19 @@ Deno.test("Operational Principle: A user registers, manages settings, and shares
   assertEquals(userDoc.reminderTime, null);
   assertEquals(userDoc.shareLinks, []);
   assertEquals(userDoc.isAdmin, false);
-  console.log("  ✅  Effect Confirmed: New user 'athlete1' created with default state.");
+  console.log(
+    "  ✅  Effect Confirmed: New user 'athlete1' created with default state.",
+  );
 
   // 2. Personalizes their notification reminder time
   const newReminderTime = "08:00";
-  console.log(`  ➡️  Action: setReminderTime({ user: '${userId}', time: '${newReminderTime}' })`);
-  const setResult = await concept.setReminderTime({ user: userId, time: newReminderTime });
+  console.log(
+    `  ➡️  Action: setReminderTime({ user: '${userId}', time: '${newReminderTime}' })`,
+  );
+  const setResult = await concept.setReminderTime({
+    user: userId,
+    time: newReminderTime,
+  });
   console.log("  ⬅️  Result:", setResult);
 
   assert(!isError(setResult), "Setting reminder time should succeed");
@@ -43,11 +62,18 @@ Deno.test("Operational Principle: A user registers, manages settings, and shares
   const updatedUserDoc = await concept.users.findOne({ _id: userId });
   assertExists(updatedUserDoc, "User document should still exist");
   assertEquals(updatedUserDoc.reminderTime, newReminderTime);
-  console.log("  ✅  Effect Confirmed: User's reminderTime updated to '08:00'.");
+  console.log(
+    "  ✅  Effect Confirmed: User's reminderTime updated to '08:00'.",
+  );
 
   // 3. Generates a temporary share link
-  console.log(`  ➡️  Action: createShareLink({ owner: '${userId}', ttlSeconds: 3600 })`);
-  const createLinkResult = await concept.createShareLink({ owner: userId, ttlSeconds: 3600 });
+  console.log(
+    `  ➡️  Action: createShareLink({ owner: '${userId}', ttlSeconds: 3600 })`,
+  );
+  const createLinkResult = await concept.createShareLink({
+    owner: userId,
+    ttlSeconds: 3600,
+  });
   console.log("  ⬅️  Result:", createLinkResult);
 
   assert(!isError(createLinkResult), "Creating a share link should succeed");
@@ -56,26 +82,75 @@ Deno.test("Operational Principle: A user registers, manages settings, and shares
 
   // Effect Verification
   const userAfterLinkCreation = await concept.users.findOne({ _id: userId });
-  assertEquals(userAfterLinkCreation?.shareLinks.length, 1, "User should have one share link ID");
+  assertEquals(
+    userAfterLinkCreation?.shareLinks.length,
+    1,
+    "User should have one share link ID",
+  );
   const shareLinkDoc = await concept.shareLinks.findOne({ token: token });
   assertExists(shareLinkDoc, "ShareLink document should be created");
   assertEquals(shareLinkDoc.owner, userId);
   assertEquals(userAfterLinkCreation?.shareLinks[0], shareLinkDoc._id);
-  console.log("  ✅  Effect Confirmed: Share link created and associated with the user.");
+  console.log(
+    "  ✅  Effect Confirmed: Share link created and associated with the user.",
+  );
+
+  // Query share links for owner
+  const listedLinks = await concept._listShareLinks({ owner: userId });
+  assert(!(listedLinks as any).error, "_listShareLinks should succeed");
+  const linkEntries = listedLinks as Array<
+    { shareLink: ID; token: string; expiry: string; expired: boolean }
+  >;
+  assertEquals(linkEntries.length, 1);
+  assertEquals(linkEntries[0].token, token);
+  assertEquals(linkEntries[0].expired, false);
+
+  // Resolve share link token
+  const resolved = await concept._resolveShareLink({ token });
+  assertEquals(
+    resolved.length,
+    1,
+    "_resolveShareLink should expose active token",
+  );
+  assertEquals(resolved[0].owner, userId);
+  assertEquals(resolved[0].expired, false);
 
   // 4. Revokes the temporary share link
-  console.log(`  ➡️  Action: revokeShareLink({ owner: '${userId}', token: '${token}' })`);
-  const revokeResult = await concept.revokeShareLink({ owner: userId, token: token });
+  console.log(
+    `  ➡️  Action: revokeShareLink({ owner: '${userId}', token: '${token}' })`,
+  );
+  const revokeResult = await concept.revokeShareLink({
+    owner: userId,
+    token: token,
+  });
   console.log("  ⬅️  Result:", revokeResult);
 
   assert(!isError(revokeResult), "Revoking the share link should succeed");
 
   // Effect Verification
   const userAfterRevoke = await concept.users.findOne({ _id: userId });
-  assertEquals(userAfterRevoke?.shareLinks.length, 0, "User's shareLinks array should be empty");
+  assertEquals(
+    userAfterRevoke?.shareLinks.length,
+    0,
+    "User's shareLinks array should be empty",
+  );
   const revokedLinkDoc = await concept.shareLinks.findOne({ token: token });
   assertEquals(revokedLinkDoc, null, "ShareLink document should be deleted");
-  console.log("  ✅  Effect Confirmed: Share link has been successfully revoked and deleted.");
+  console.log(
+    "  ✅  Effect Confirmed: Share link has been successfully revoked and deleted.",
+  );
+
+  const listedAfterRevoke = await concept._listShareLinks({ owner: userId });
+  assert(!(listedAfterRevoke as any).error);
+  const afterEntries = listedAfterRevoke as Array<any>;
+  assertEquals(afterEntries.length, 0);
+
+  const resolvedAfter = await concept._resolveShareLink({ token });
+  assertEquals(
+    resolvedAfter.length,
+    0,
+    "_resolveShareLink should return [] after revocation",
+  );
 
   console.log("  🏁 Principle Test Complete.");
   await client.close();
@@ -88,24 +163,43 @@ Deno.test("Interesting Scenario: Username uniqueness", async () => {
 
   // 1. Register a user successfully
   const username = "unique_user";
-  console.log(`  ➡️  Action: register({ username: '${username}', password: 'pw' })`);
-  const firstRegisterResult = await concept.register({ username, password: "pw" });
+  console.log(
+    `  ➡️  Action: register({ username: '${username}', password: 'pw' })`,
+  );
+  const firstRegisterResult = await concept.register({
+    username,
+    password: "pw",
+  });
   console.log("  ⬅️  Result:", firstRegisterResult);
   assert(!isError(firstRegisterResult), "First registration should succeed");
 
   // 2. Attempt to register with the same username
-  console.log(`  ➡️  Action: register({ username: '${username}', password: 'pw2' })`);
-  const secondRegisterResult = await concept.register({ username, password: "pw2" });
+  console.log(
+    `  ➡️  Action: register({ username: '${username}', password: 'pw2' })`,
+  );
+  const secondRegisterResult = await concept.register({
+    username,
+    password: "pw2",
+  });
   console.log("  ⬅️  Result:", secondRegisterResult);
 
   // Requirement Verification
   assert(isError(secondRegisterResult), "Second registration should fail");
-  assertEquals((secondRegisterResult as { error: string }).error, "Username already taken");
-  console.log("  ✅  Requirement Confirmed: Cannot register with a duplicate username.");
+  assertEquals(
+    (secondRegisterResult as { error: string }).error,
+    "Username already taken",
+  );
+  console.log(
+    "  ✅  Requirement Confirmed: Cannot register with a duplicate username.",
+  );
 
   // Effect Verification
   const userCount = await concept.users.countDocuments({ username });
-  assertEquals(userCount, 1, "There should still be only one user with that username");
+  assertEquals(
+    userCount,
+    1,
+    "There should still be only one user with that username",
+  );
   console.log("  ✅  Effect Confirmed: No new user was created.");
 
   console.log("  🏁 Uniqueness Test Complete.");
@@ -119,77 +213,146 @@ Deno.test("Interesting Scenario: Actions on a non-existent user", async () => {
   const fakeUserId = freshID() as ID;
 
   // 1. Attempt to set reminder time for a user that doesn't exist
-  console.log(`  ➡️  Action: setReminderTime({ user: '${fakeUserId}', time: '10:00' })`);
-  const setResult = await concept.setReminderTime({ user: fakeUserId, time: "10:00" });
+  console.log(
+    `  ➡️  Action: setReminderTime({ user: '${fakeUserId}', time: '10:00' })`,
+  );
+  const setResult = await concept.setReminderTime({
+    user: fakeUserId,
+    time: "10:00",
+  });
   console.log("  ⬅️  Result:", setResult);
 
   // Requirement Verification
-  assert(isError(setResult), "setReminderTime should fail for a non-existent user");
+  assert(
+    isError(setResult),
+    "setReminderTime should fail for a non-existent user",
+  );
   assertEquals((setResult as { error: string }).error, "User not found");
-  console.log("  ✅  Requirement Confirmed: Cannot set reminder time for a non-existent user.");
+  console.log(
+    "  ✅  Requirement Confirmed: Cannot set reminder time for a non-existent user.",
+  );
 
   // 2. Attempt to create a share link for a user that doesn't exist
-  console.log(`  ➡️  Action: createShareLink({ owner: '${fakeUserId}', ttlSeconds: 60 })`);
-  const createLinkResult = await concept.createShareLink({ owner: fakeUserId, ttlSeconds: 60 });
+  console.log(
+    `  ➡️  Action: createShareLink({ owner: '${fakeUserId}', ttlSeconds: 60 })`,
+  );
+  const createLinkResult = await concept.createShareLink({
+    owner: fakeUserId,
+    ttlSeconds: 60,
+  });
   console.log("  ⬅️  Result:", createLinkResult);
 
   // Requirement Verification
-  assert(isError(createLinkResult), "createShareLink should fail for a non-existent user");
-  assertEquals((createLinkResult as { error: string }).error, "Owner user not found");
-  console.log("  ✅  Requirement Confirmed: Cannot create a share link for a non-existent owner.");
+  assert(
+    isError(createLinkResult),
+    "createShareLink should fail for a non-existent user",
+  );
+  assertEquals(
+    (createLinkResult as { error: string }).error,
+    "Owner user not found",
+  );
+  console.log(
+    "  ✅  Requirement Confirmed: Cannot create a share link for a non-existent owner.",
+  );
 
   console.log("  🏁 Non-Existent User Test Complete.");
   await client.close();
 });
 
 Deno.test("Interesting Scenario: Revoking unauthorized or non-existent links", async () => {
-  console.log("\n🧪 Running Test: Revoking unauthorized or non-existent links...");
+  console.log(
+    "\n🧪 Running Test: Revoking unauthorized or non-existent links...",
+  );
   const [db, client] = await testDb();
   const concept = new UserAccountConcept(db);
 
   // 1. Create two users
-  const userAResult = await concept.register({ username: "userA", password: "pw" });
+  const userAResult = await concept.register({
+    username: "userA",
+    password: "pw",
+  });
   assert(!isError(userAResult));
   const { user: userAId } = userAResult as { user: ID };
 
-  const userBResult = await concept.register({ username: "userB", password: "pw" });
+  const userBResult = await concept.register({
+    username: "userB",
+    password: "pw",
+  });
   assert(!isError(userBResult));
   const { user: userBId } = userBResult as { user: ID };
   console.log(`  - Setup: Created userA (${userAId}) and userB (${userBId})`);
 
   // 2. User A creates a share link
-  const createLinkResult = await concept.createShareLink({ owner: userAId, ttlSeconds: 300 });
+  const createLinkResult = await concept.createShareLink({
+    owner: userAId,
+    ttlSeconds: 300,
+  });
   assert(!isError(createLinkResult));
   const { token: tokenA } = createLinkResult as { token: string };
   console.log(`  - Setup: userA created a share link with token: ${tokenA}`);
 
   // 3. Attempt to revoke a link that doesn't exist
   const fakeToken = crypto.randomUUID();
-  console.log(`  ➡️  Action: revokeShareLink({ owner: '${userAId}', token: '${fakeToken}' })`);
-  const revokeFakeResult = await concept.revokeShareLink({ owner: userAId, token: fakeToken });
+  console.log(
+    `  ➡️  Action: revokeShareLink({ owner: '${userAId}', token: '${fakeToken}' })`,
+  );
+  const revokeFakeResult = await concept.revokeShareLink({
+    owner: userAId,
+    token: fakeToken,
+  });
   console.log("  ⬅️  Result:", revokeFakeResult);
 
   // Requirement Verification
-  assert(isError(revokeFakeResult), "Revoking a non-existent token should fail");
-  assertEquals((revokeFakeResult as { error: string }).error, "ShareLink not found or you do not have permission to revoke it");
-  console.log("  ✅  Requirement Confirmed: Cannot revoke a token that does not exist.");
+  assert(
+    isError(revokeFakeResult),
+    "Revoking a non-existent token should fail",
+  );
+  assertEquals(
+    (revokeFakeResult as { error: string }).error,
+    "ShareLink not found or you do not have permission to revoke it",
+  );
+  console.log(
+    "  ✅  Requirement Confirmed: Cannot revoke a token that does not exist.",
+  );
 
   // 4. User B attempts to revoke User A's link
-  console.log(`  ➡️  Action: revokeShareLink({ owner: '${userBId}', token: '${tokenA}' })`);
-  const revokeUnauthorizedResult = await concept.revokeShareLink({ owner: userBId, token: tokenA });
+  console.log(
+    `  ➡️  Action: revokeShareLink({ owner: '${userBId}', token: '${tokenA}' })`,
+  );
+  const revokeUnauthorizedResult = await concept.revokeShareLink({
+    owner: userBId,
+    token: tokenA,
+  });
   console.log("  ⬅️  Result:", revokeUnauthorizedResult);
 
   // Requirement Verification
-  assert(isError(revokeUnauthorizedResult), "Revoking an unauthorized link should fail");
-  assertEquals((revokeUnauthorizedResult as { error: string }).error, "ShareLink not found or you do not have permission to revoke it");
-  console.log("  ✅  Requirement Confirmed: A user cannot revoke another user's share link.");
+  assert(
+    isError(revokeUnauthorizedResult),
+    "Revoking an unauthorized link should fail",
+  );
+  assertEquals(
+    (revokeUnauthorizedResult as { error: string }).error,
+    "ShareLink not found or you do not have permission to revoke it",
+  );
+  console.log(
+    "  ✅  Requirement Confirmed: A user cannot revoke another user's share link.",
+  );
 
   // Effect Verification
   const linkDoc = await concept.shareLinks.findOne({ token: tokenA });
-  assertExists(linkDoc, "The share link should not have been deleted by the failed attempts");
+  assertExists(
+    linkDoc,
+    "The share link should not have been deleted by the failed attempts",
+  );
   const userADoc = await concept.users.findOne({ _id: userAId });
-  assertEquals(userADoc?.shareLinks.length, 1, "User A's link list should be unaffected");
-  console.log("  ✅  Effect Confirmed: Failed revocations did not alter state.");
+  assertEquals(
+    userADoc?.shareLinks.length,
+    1,
+    "User A's link list should be unaffected",
+  );
+  console.log(
+    "  ✅  Effect Confirmed: Failed revocations did not alter state.",
+  );
 
   console.log("  🏁 Unauthorized Revocation Test Complete.");
   await client.close();
@@ -201,58 +364,107 @@ Deno.test("Interesting Scenario: Managing multiple share links", async () => {
   const concept = new UserAccountConcept(db);
 
   // 1. Create a user
-  const registerResult = await concept.register({ username: "link_master", password: "pw" });
+  const registerResult = await concept.register({
+    username: "link_master",
+    password: "pw",
+  });
   assert(!isError(registerResult));
   const { user: userId } = registerResult as { user: ID };
   console.log(`  - Setup: Created user 'link_master' (${userId})`);
 
   // 2. Create two share links
-  console.log(`  ➡️  Action: createShareLink({ owner: '${userId}', ttlSeconds: 60 })`);
-  const link1Result = await concept.createShareLink({ owner: userId, ttlSeconds: 60 });
+  console.log(
+    `  ➡️  Action: createShareLink({ owner: '${userId}', ttlSeconds: 60 })`,
+  );
+  const link1Result = await concept.createShareLink({
+    owner: userId,
+    ttlSeconds: 60,
+  });
   assert(!isError(link1Result));
   const { token: token1 } = link1Result as { token: string };
   console.log("  ⬅️  Result:", link1Result);
 
-  console.log(`  ➡️  Action: createShareLink({ owner: '${userId}', ttlSeconds: 120 })`);
-  const link2Result = await concept.createShareLink({ owner: userId, ttlSeconds: 120 });
+  console.log(
+    `  ➡️  Action: createShareLink({ owner: '${userId}', ttlSeconds: 120 })`,
+  );
+  const link2Result = await concept.createShareLink({
+    owner: userId,
+    ttlSeconds: 120,
+  });
   assert(!isError(link2Result));
   const { token: token2 } = link2Result as { token: string };
   console.log("  ⬅️  Result:", link2Result);
 
   // Effect Verification
   let userDoc = await concept.users.findOne({ _id: userId });
-  assertEquals(userDoc?.shareLinks.length, 2, "User should now have two share links");
+  assertEquals(
+    userDoc?.shareLinks.length,
+    2,
+    "User should now have two share links",
+  );
   let linkCount = await concept.shareLinks.countDocuments({ owner: userId });
-  assertEquals(linkCount, 2, "There should be two share link documents for the user");
+  assertEquals(
+    linkCount,
+    2,
+    "There should be two share link documents for the user",
+  );
   console.log("  ✅  Effect Confirmed: User has two active share links.");
 
   // 3. Revoke the first link
-  console.log(`  ➡️  Action: revokeShareLink({ owner: '${userId}', token: '${token1}' })`);
-  const revoke1Result = await concept.revokeShareLink({ owner: userId, token: token1 });
+  console.log(
+    `  ➡️  Action: revokeShareLink({ owner: '${userId}', token: '${token1}' })`,
+  );
+  const revoke1Result = await concept.revokeShareLink({
+    owner: userId,
+    token: token1,
+  });
   console.log("  ⬅️  Result:", revoke1Result);
   assert(!isError(revoke1Result));
 
   // Effect Verification
   userDoc = await concept.users.findOne({ _id: userId });
-  assertEquals(userDoc?.shareLinks.length, 1, "User should have one remaining share link");
+  assertEquals(
+    userDoc?.shareLinks.length,
+    1,
+    "User should have one remaining share link",
+  );
   const link1Doc = await concept.shareLinks.findOne({ token: token1 });
   assertEquals(link1Doc, null, "Link 1 should be deleted");
   const link2Doc = await concept.shareLinks.findOne({ token: token2 });
   assertExists(link2Doc, "Link 2 should still exist");
-  assertEquals(userDoc?.shareLinks[0], link2Doc?._id, "The remaining link ID in the user doc should be for link 2");
-  console.log("  ✅  Effect Confirmed: First link was revoked, second link remains.");
+  assertEquals(
+    userDoc?.shareLinks[0],
+    link2Doc?._id,
+    "The remaining link ID in the user doc should be for link 2",
+  );
+  console.log(
+    "  ✅  Effect Confirmed: First link was revoked, second link remains.",
+  );
 
   // 4. Revoke the second link
-  console.log(`  ➡️  Action: revokeShareLink({ owner: '${userId}', token: '${token2}' })`);
-  const revoke2Result = await concept.revokeShareLink({ owner: userId, token: token2 });
+  console.log(
+    `  ➡️  Action: revokeShareLink({ owner: '${userId}', token: '${token2}' })`,
+  );
+  const revoke2Result = await concept.revokeShareLink({
+    owner: userId,
+    token: token2,
+  });
   console.log("  ⬅️  Result:", revoke2Result);
   assert(!isError(revoke2Result));
 
   // Effect Verification
   userDoc = await concept.users.findOne({ _id: userId });
-  assertEquals(userDoc?.shareLinks.length, 0, "User's shareLinks array should now be empty");
+  assertEquals(
+    userDoc?.shareLinks.length,
+    0,
+    "User's shareLinks array should now be empty",
+  );
   linkCount = await concept.shareLinks.countDocuments({ owner: userId });
-  assertEquals(linkCount, 0, "There should be no more share link documents for the user");
+  assertEquals(
+    linkCount,
+    0,
+    "There should be no more share link documents for the user",
+  );
   console.log("  ✅  Effect Confirmed: All share links have been revoked.");
 
   console.log("  🏁 Multiple Links Test Complete.");
@@ -269,7 +481,10 @@ Deno.test("Authentication: login and logout with session token", async () => {
   assert(!isError(reg));
 
   // Bad login
-  const badLogin = await concept.login({ username: "auth_user", password: "wrong" });
+  const badLogin = await concept.login({
+    username: "auth_user",
+    password: "wrong",
+  });
   assert(isError(badLogin));
   assertEquals((badLogin as { error: string }).error, "Invalid credentials");
 
@@ -322,9 +537,12 @@ Deno.test("Authentication: _isSignedIn convenience and expiry handling", async (
   assertEquals(signedIn, true);
 
   // Expire the session manually then check
-  await concept.sessions.updateOne({ token }, { $set: { expiry: new Date(Date.now() - 1000) } });
+  await concept.sessions.updateOne({ token }, {
+    $set: { expiry: new Date(Date.now() - 1000) },
+  });
   const signedInAfterExpireRes = await concept._isSignedIn({ token });
-  const signedInAfterExpire = (signedInAfterExpireRes as Array<{ signedIn: boolean }>)[0].signedIn;
+  const signedInAfterExpire =
+    (signedInAfterExpireRes as Array<{ signedIn: boolean }>)[0].signedIn;
   assertEquals(signedInAfterExpire, false);
 
   // _getUserByToken should now return []
@@ -350,7 +568,10 @@ Deno.test("Admin flag: register with isAdmin and _isAdmin", async () => {
   const [db, client] = await testDb();
   const concept = new UserAccountConcept(db);
 
-  const reg = await concept.register({ username: "admin_candidate", password: "pw" });
+  const reg = await concept.register({
+    username: "admin_candidate",
+    password: "pw",
+  });
   assert(!isError(reg));
   const { user } = reg as { user: ID };
 
@@ -361,7 +582,11 @@ Deno.test("Admin flag: register with isAdmin and _isAdmin", async () => {
   assertEquals(isA1, false);
 
   // Register a separate admin user
-  const regAdmin = await concept.register({ username: "admin_user", password: "pw", isAdmin: true });
+  const regAdmin = await concept.register({
+    username: "admin_user",
+    password: "pw",
+    isAdmin: true,
+  });
   assert(!isError(regAdmin));
   const { user: adminUser } = regAdmin as { user: ID };
   const q2 = await concept._isAdmin({ user: adminUser });
@@ -370,4 +595,3 @@ Deno.test("Admin flag: register with isAdmin and _isAdmin", async () => {
 
   await client.close();
 });
-
