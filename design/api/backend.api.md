@@ -87,17 +87,18 @@ Success Response Body:
 ```
 
 ### POST /api/ExerciseLibrary/proposeDetails
-Description: Record an AI-proposed set of details from an LLM JSON string.
+Description: Generate (via Gemini) or record AI-proposed details for an exercise.
 Requirements:
-- `actorIsAdmin = true`; `exercise` exists; `llmText` JSON with optional `videoUrl`, `cues`, `recommendedFreq`, `confidence_0_1`; cues non-empty/no HTML/≤400; freq integer 0..14; url http/https; confidence in [0,1]
+- `actorIsAdmin = true`; `exercise` exists; if `llmText` is omitted, the server must have `GEMINI_API_KEY` configured; cues non-empty/no HTML/≤400; freq integer 0..14; url http/https; confidence in [0,1]
 Effects:
-- Creates pending DetailProposal
+- When `llmText` is omitted, the server calls Gemini, stores the proposed details as a pending `DetailProposal`, and returns its id. Supplying `llmText` is intended only for deterministic testing.
 Request Body:
 ```json
 {
   "exercise": "ID",
-  "llmText": "string (JSON: videoUrl?, cues, recommendedFreq, confidence_0_1)",
-  "actorIsAdmin": true
+  "actorIsAdmin": true,
+  "promptOverride": "string (optional)",
+  "llmText": "string (optional JSON override)"
 }
 ```
 Success Response Body:

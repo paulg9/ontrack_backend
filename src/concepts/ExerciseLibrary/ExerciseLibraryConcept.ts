@@ -46,14 +46,105 @@ interface ProposalDoc {
   status: "pending" | "applied" | "discarded";
 }
 
+// Validation constants
+const MAX_CUES_LENGTH = 400;
+const MAX_URL_LENGTH = 2048;
+const FREQ_MIN = 0;
+const FREQ_MAX = 14;
+const GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent";
+
+// Module-level helpers (not exposed as HTTP endpoints)
+function isNonEmpty(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function validateCues(cues: string): string | undefined {
+  if (!isNonEmpty(cues)) return "cues must be a non-empty string";
+  if (cues.length > MAX_CUES_LENGTH) {
+    return `cues must be <= ${MAX_CUES_LENGTH} characters`;
+  }
+  if (/<\/?[a-z][\s\S]*>/i.test(cues) || /<script/i.test(cues)) {
+    return "cues must not contain HTML";
+  }
+  return undefined;
+}
+
+function validateFrequency(value: number): string | undefined {
+  if (!Number.isFinite(value)) return "recommendedFreq must be a finite number";
+  if (!Number.isInteger(value)) return "recommendedFreq must be an integer";
+  if (value < FREQ_MIN || value > FREQ_MAX) {
+    return `recommendedFreq must be between ${FREQ_MIN} and ${FREQ_MAX}`;
+  }
+  return undefined;
+}
+
+function normalizeUrl(input?: string): { url?: string; error?: string } {
+  if (input === undefined) return {};
+  const trimmed = input.trim();
+  if (trimmed.length === 0) return {};
+  if (trimmed.length > MAX_URL_LENGTH) return { error: "videoUrl is too long" };
+  try {
+    const u = new URL(trimmed);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return { error: "videoUrl must use http or https" };
+    return { url: u.toString() };
+  } catch {
+    return { error: "videoUrl is not a valid URL" };
+  }
+}
+
+function buildGeminiPrompt(exercise: ExerciseDoc, promptOverride?: string): string {
+  const base = `You are an expert exercise coach. Propose missing details for an exercise.
+Return ONLY a JSON object with this exact shape:
+{
+  "videoUrl": optional_string_or_null,
+  "cues": string_nonempty,
+  "recommendedFreq": integer_${FREQ_MIN}_to_${FREQ_MAX},
+  "confidence_0_1": number_between_0_and_1
+}
+Context:
+- exerciseId: ${exercise._id}
+- title: ${exercise.title}
+- current videoUrl: ${exercise.videoUrl ?? "none"}
+- current cues: ${exercise.cues || "none"}
+- current recommendedFreq: ${exercise.recommendedFreq}
+Guidelines:
+- If unsure about videoUrl, return null.
+- Provide concise, safe, actionable cues (<= ${MAX_CUES_LENGTH} chars), no HTML/Markdown.
+- recommendedFreq must be an integer between ${FREQ_MIN} and ${FREQ_MAX} inclusive.
+- Do not include any text outside the JSON object. No backticks, no labels, no explanations.`;
+  return promptOverride && promptOverride.trim().length > 0
+    ? `${base}
+
+Additional instructions from administrator:
+${promptOverride.trim()}`
+    : base;
+}
+
+function extractTextFromGeminiResponse(resp: any): string | undefined {
+  const candidates = resp?.candidates;
+  if (!Array.isArray(candidates)) return undefined;
+  for (const candidate of candidates) {
+    const parts = candidate?.content?.parts ?? candidate?.parts ?? [];
+    if (Array.isArray(parts)) {
+      for (const part of parts) {
+        if (typeof part?.text === "string" && part.text.trim().length > 0) {
+          return part.text;
+        }
+      }
+    }
+    if (typeof candidate?.text === "string" && candidate.text.trim().length > 0) {
+      return candidate.text;
+    }
+    if (typeof candidate?.output === "string" && candidate.output.trim().length > 0) {
+      return candidate.output;
+    }
+  }
+  return undefined;
+}
+
 export default class ExerciseLibraryConcept {
   public readonly exercises: Collection<ExerciseDoc>;
   public readonly detailProposals: Collection<ProposalDoc>;
-
-  private static readonly MAX_CUES_LENGTH = 400;
-  private static readonly MAX_URL_LENGTH = 2048;
-  private static readonly FREQ_MIN = 0;
-  private static readonly FREQ_MAX = 14;
 
   constructor(db: Db) {
     this.exercises = db.collection<ExerciseDoc>(`${PREFIX}.exercises`);
@@ -80,12 +171,12 @@ export default class ExerciseLibraryConcept {
     actorIsAdmin: boolean;
   }): Promise<{ exercise: Exercise } | { error: string }> {
     if (!actorIsAdmin) return { error: "Action requires Administrator" };
-    if (!this.isNonEmpty(title)) return { error: "title must be a non-empty string" };
-    const cuesCheck = this.validateCues(cues);
+    if (!isNonEmpty(title)) return { error: "title must be a non-empty string" };
+    const cuesCheck = validateCues(cues);
     if (cuesCheck) return { error: cuesCheck };
-    const freqCheck = this.validateFrequency(recommendedFreq);
+    const freqCheck = validateFrequency(recommendedFreq);
     if (freqCheck) return { error: freqCheck };
-    const urlResult = this.normalizeUrl(videoUrl);
+    const urlResult = normalizeUrl(videoUrl);
     if (urlResult.error) return { error: urlResult.error };
 
     const exerciseId = freshID() as Exercise;
@@ -109,7 +200,7 @@ export default class ExerciseLibraryConcept {
    */
   async addExerciseDraft({ title, actorIsAdmin }: { title: string; actorIsAdmin: boolean }): Promise<{ exercise: Exercise } | { error: string }> {
     if (!actorIsAdmin) return { error: "Action requires Administrator" };
-    if (!this.isNonEmpty(title)) return { error: "title must be a non-empty string" };
+    if (!isNonEmpty(title)) return { error: "title must be a non-empty string" };
     const exerciseId = freshID() as Exercise;
     const doc: ExerciseDoc = {
       _id: exerciseId,
@@ -150,11 +241,11 @@ export default class ExerciseLibraryConcept {
     const update: { $set: Partial<Omit<ExerciseDoc, "_id">>; $unset?: { videoUrl?: "" } } = { $set: {} };
 
     if (title !== undefined) {
-      if (!this.isNonEmpty(title)) return { error: "title must be a non-empty string" };
+      if (!isNonEmpty(title)) return { error: "title must be a non-empty string" };
       update.$set.title = title.trim();
     }
     if (videoUrl !== undefined) {
-      const urlResult = this.normalizeUrl(videoUrl === null ? "" : videoUrl);
+      const urlResult = normalizeUrl(videoUrl === null ? "" : videoUrl);
       if (urlResult.error) return { error: urlResult.error };
       if (urlResult.url) {
         update.$set.videoUrl = urlResult.url;
@@ -163,12 +254,12 @@ export default class ExerciseLibraryConcept {
       }
     }
     if (cues !== undefined) {
-      const cuesCheck = this.validateCues(cues);
+      const cuesCheck = validateCues(cues);
       if (cuesCheck) return { error: cuesCheck };
       update.$set.cues = cues.trim();
     }
     if (recommendedFreq !== undefined) {
-      const freqCheck = this.validateFrequency(recommendedFreq);
+      const freqCheck = validateFrequency(recommendedFreq);
       if (freqCheck) return { error: freqCheck };
       update.$set.recommendedFreq = recommendedFreq;
     }
@@ -196,47 +287,99 @@ export default class ExerciseLibraryConcept {
   }
 
   /**
-   * proposeDetails (exercise: Exercise, llmText: String, actorIsAdmin: Boolean): (proposal: DetailProposal)
+   * proposeDetails (exercise: Exercise, actorIsAdmin: Boolean, promptOverride?: String, llmText?: String): (proposal: DetailProposal)
    *
-   * requires actorIsAdmin = true; exercise exists; llmText is a JSON object with optional videoUrl, cues, recommendedFreq, confidence_0_1
-   * effects parses llmText; validates fields; records a DetailProposal with status := "pending"; returns proposal id
+   * requires actorIsAdmin = true; exercise exists; if llmText is not provided, the environment variable GEMINI_API_KEY must be configured
+   * effects generates (via Gemini when llmText absent) or parses detail JSON; validates fields; records a DetailProposal with status := "pending"; returns proposal id
    */
   async proposeDetails({
     exercise,
     llmText,
+    promptOverride,
     actorIsAdmin,
   }: {
     exercise: Exercise;
-    llmText: string;
+    llmText?: string;
+    promptOverride?: string;
     actorIsAdmin: boolean;
   }): Promise<{ proposal: Proposal } | { error: string }> {
     if (!actorIsAdmin) return { error: "Action requires Administrator" };
     const existing = await this.exercises.findOne({ _id: exercise });
     if (!existing) return { error: `exercise ${exercise} does not exist` };
 
-    // Extract first JSON object from llmText
-    const match = llmText.match(/\{[\s\S]*\}/);
-    if (!match) return { error: "no JSON object found in llmText" };
+    let llmResponse = llmText;
+    if (!llmResponse) {
+      const apiKey = Deno.env.get("GEMINI_API_KEY");
+      if (!apiKey) {
+        return { error: "AI augmentation requires GEMINI_API_KEY to be configured on the server." };
+      }
+
+      const prompt = buildGeminiPrompt(existing, promptOverride);
+      let response: Response;
+      try {
+        response = await fetch(`${GEMINI_ENDPOINT}?key=${apiKey}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [{ text: prompt }],
+              },
+            ],
+          }),
+        });
+      } catch (err) {
+        return { error: `Failed to contact Gemini: ${err instanceof Error ? err.message : String(err)}` };
+      }
+
+      if (!response.ok) {
+        let details = "";
+        try {
+          const errorJson = await response.json();
+          details = errorJson?.error?.message ?? JSON.stringify(errorJson);
+        } catch {
+          details = await response.text().catch(() => "");
+        }
+        return { error: `Gemini API error (${response.status}): ${details || "Unknown error"}` };
+      }
+
+      let payload: any;
+      try {
+        payload = await response.json();
+      } catch (err) {
+        return { error: `Unable to parse Gemini response: ${err instanceof Error ? err.message : String(err)}` };
+      }
+
+      llmResponse = extractTextFromGeminiResponse(payload);
+      if (!llmResponse) {
+        return { error: "Gemini response did not contain any text output." };
+      }
+    }
+
+    const match = llmResponse.match(/\{[\s\S]*\}/);
+    if (!match) return { error: "no JSON object found in LLM response" };
 
     let parsed: any;
     try {
       parsed = JSON.parse(match[0]);
     } catch {
-      return { error: "invalid JSON in llmText" };
+      return { error: "invalid JSON in LLM response" };
     }
 
     const cuesVal = typeof parsed.cues === "string" ? parsed.cues : "";
-    const cuesCheck = this.validateCues(cuesVal);
+    const cuesCheck = validateCues(cuesVal);
     if (cuesCheck) return { error: cuesCheck };
 
     const freqVal = typeof parsed.recommendedFreq === "number" ? parsed.recommendedFreq : NaN;
-    const freqCheck = this.validateFrequency(freqVal);
+    const freqCheck = validateFrequency(freqVal);
     if (freqCheck) return { error: freqCheck };
 
     const conf = typeof parsed.confidence_0_1 === "number" ? parsed.confidence_0_1 : 0;
     if (!(conf >= 0 && conf <= 1)) return { error: "confidence_0_1 must be between 0 and 1" };
 
-    const urlNorm = this.normalizeUrl(typeof parsed.videoUrl === "string" ? parsed.videoUrl : undefined);
+    const urlNorm = normalizeUrl(typeof parsed.videoUrl === "string" ? parsed.videoUrl : undefined);
     if (urlNorm.error) return { error: urlNorm.error };
 
     const proposalId = freshID() as Proposal;
@@ -327,44 +470,6 @@ export default class ExerciseLibraryConcept {
     return this.detailProposals.find({ exercise }).toArray();
   }
 
-  // Validation helpers
-  private isNonEmpty(value: unknown): value is string {
-    return typeof value === "string" && value.trim().length > 0;
-  }
-
-  private validateCues(cues: string): string | undefined {
-    if (!this.isNonEmpty(cues)) return "cues must be a non-empty string";
-    if (cues.length > ExerciseLibraryConcept.MAX_CUES_LENGTH) {
-      return `cues must be <= ${ExerciseLibraryConcept.MAX_CUES_LENGTH} characters`;
-    }
-    if (/<\/?[a-z][\s\S]*>/i.test(cues) || /<script/i.test(cues)) {
-      return "cues must not contain HTML";
-    }
-    return undefined;
-  }
-
-  private validateFrequency(value: number): string | undefined {
-    if (!Number.isFinite(value)) return "recommendedFreq must be a finite number";
-    if (!Number.isInteger(value)) return "recommendedFreq must be an integer";
-    if (value < ExerciseLibraryConcept.FREQ_MIN || value > ExerciseLibraryConcept.FREQ_MAX) {
-      return `recommendedFreq must be between ${ExerciseLibraryConcept.FREQ_MIN} and ${ExerciseLibraryConcept.FREQ_MAX}`;
-    }
-    return undefined;
-  }
-
-  private normalizeUrl(input?: string): { url?: string; error?: string } {
-    if (input === undefined) return {};
-    const trimmed = input.trim();
-    if (trimmed.length === 0) return {};
-    if (trimmed.length > ExerciseLibraryConcept.MAX_URL_LENGTH) return { error: "videoUrl is too long" };
-    try {
-      const u = new URL(trimmed);
-      if (u.protocol !== "http:" && u.protocol !== "https:") return { error: "videoUrl must use http or https" };
-      return { url: u.toString() };
-    } catch {
-      return { error: "videoUrl is not a valid URL" };
-    }
-  }
 }
 
 

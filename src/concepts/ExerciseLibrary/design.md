@@ -11,7 +11,7 @@
   - Adopted branded `ID` (`_id`) for both Exercises and Proposals, generated via `freshID()`; removed the externally supplied `exerciseId` field.
 
 - AI proposal flow
-  - Original `proposeDetails(exerciseId, llm)` made a live Gemini call. For deterministic, low-cost tests, `proposeDetails(exercise, llmText)` now accepts an LLM output string (JSON) and parses/validates it. This preserves the review-and-apply workflow without network dependency.
+  - `proposeDetails` now mirrors the original AI-augmented design: if no `llmText` override is provided, the concept composes a prompt from the current exercise data, calls Gemini using `GEMINI_API_KEY`, and stores the resulting JSON as a pending proposal. For deterministic tests we can still pass `llmText` to bypass the network call.
   - Kept the proposal records and explicit apply/discard actions. No exercise changes occur until `applyDetails`.
 
 - Validation and guardrails
@@ -26,7 +26,7 @@
 
 - Role checks were removed from the implementation (previously used `Role = 'Administrator' | 'Athlete'`). Enforcing roles would couple concepts; instead, role enforcement belongs to a separate concept or the app layer. The spec still assumes admin-only mutation in the product design, but this concept remains self-contained.
 - IDs are system-generated. Previously, `exerciseId` was provided by the caller; now `_id` is generated. If human-friendly slugs are needed later, they can be an additional field, not the primary key.
-- Live LLM calls were replaced with a pure input string (`llmText`) to ensure tests are reproducible and offline.
+- The concept expects `GEMINI_API_KEY` in its environment when running in "real" mode; when absent it returns a clear error so environments without the key (e.g., tests) can continue to inject `llmText` manually.
 
 ## Residual risks and future work
 
