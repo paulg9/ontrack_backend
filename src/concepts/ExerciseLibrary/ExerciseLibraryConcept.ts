@@ -302,7 +302,7 @@ export default class ExerciseLibraryConcept {
     llmText?: string;
     promptOverride?: string;
     actorIsAdmin: boolean;
-  }): Promise<{ proposal: Proposal } | { error: string }> {
+  }): Promise<{ proposal: Proposal; details: { videoUrl: string | null; cues: string; recommendedFreq: number; confidence_0_1: number } } | { error: string }> {
     if (!actorIsAdmin) return { error: "Action requires Administrator" };
     const existing = await this.exercises.findOne({ _id: exercise });
     if (!existing) return { error: `exercise ${exercise} does not exist` };
@@ -359,24 +359,45 @@ export default class ExerciseLibraryConcept {
     }
 
     const match = llmResponse.match(/\{[\s\S]*\}/);
-    if (!match) return { error: "no JSON object found in LLM response" };
+    if (!match) {
+      console.error("Gemini output missing JSON:", llmResponse);
+      return { error: "Gemini response did not contain a JSON object." };
+    }
 
     let parsed: any;
     try {
       parsed = JSON.parse(match[0]);
     } catch {
-      return { error: "invalid JSON in LLM response" };
+      console.error("Gemini output invalid JSON:", match[0]);
+      return { error: "Gemini response did not contain valid JSON." };
     }
 
-    const cuesVal = typeof parsed.cues === "string" ? parsed.cues : "";
+    let cuesVal = "";
+    if (typeof parsed.cues === "string") {
+      cuesVal = parsed.cues;
+    } else if (Array.isArray(parsed.cues)) {
+      cuesVal = parsed.cues.join(" ");
+    }
     const cuesCheck = validateCues(cuesVal);
     if (cuesCheck) return { error: cuesCheck };
 
-    const freqVal = typeof parsed.recommendedFreq === "number" ? parsed.recommendedFreq : NaN;
+    const freqRaw = typeof parsed.recommendedFreq === "number"
+      ? parsed.recommendedFreq
+      : Number(parsed.recommendedFreq);
+    if (!Number.isFinite(freqRaw)) {
+      return { error: "recommendedFreq must be a number" };
+    }
+    if (!Number.isInteger(freqRaw)) {
+      return { error: "recommendedFreq must be an integer" };
+    }
+    const freqVal = freqRaw;
     const freqCheck = validateFrequency(freqVal);
     if (freqCheck) return { error: freqCheck };
 
-    const conf = typeof parsed.confidence_0_1 === "number" ? parsed.confidence_0_1 : 0;
+    let conf = typeof parsed.confidence_0_1 === "number" ? parsed.confidence_0_1 : Number(parsed.confidence_0_1 ?? 0);
+    if (!Number.isFinite(conf)) conf = 0;
+    if (conf < 0) conf = 0;
+    if (conf > 1) conf = 1;
     if (!(conf >= 0 && conf <= 1)) return { error: "confidence_0_1 must be between 0 and 1" };
 
     const urlNorm = normalizeUrl(typeof parsed.videoUrl === "string" ? parsed.videoUrl : undefined);
@@ -394,7 +415,15 @@ export default class ExerciseLibraryConcept {
       status: "pending",
     };
     await this.detailProposals.insertOne(doc);
-    return { proposal: proposalId };
+    return {
+      proposal: proposalId,
+      details: {
+        videoUrl: doc.videoUrl ?? null,
+        cues: doc.cues,
+        recommendedFreq: doc.recommendedFreq,
+        confidence_0_1: doc.confidence_0_1,
+      },
+    };
   }
 
   /**

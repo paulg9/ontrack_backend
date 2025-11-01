@@ -42,9 +42,9 @@ invariants
   - requires actorIsAdmin = true; exercise exists
   - effects sets deprecated := true (existing plans may still reference it; new selections should exclude it)
 
-- proposeDetails (exercise: Exercise, actorIsAdmin: Boolean, promptOverride?: String, llmText?: String): (proposal: DetailProposal)
+- proposeDetails (exercise: Exercise, actorIsAdmin: Boolean, promptOverride?: String, llmText?: String): (proposal: DetailProposal, details: {videoUrl?: Optional String, cues: String, recommendedFreq: Number, confidence_0_1: Number})
   - requires actorIsAdmin = true; exercise exists; if llmText is omitted, the environment variable `GEMINI_API_KEY` must be configured and reachable
-  - effects when llmText is omitted: composes an AI prompt using the current exercise details and (optionally) `promptOverride`, calls Gemini to obtain a JSON proposal; otherwise uses the supplied llmText (for deterministic testing); validates fields; records a DetailProposal with status := "pending"; does not modify the exercise; returns proposal id as proposal
+  - effects when llmText is omitted: composes an AI prompt using the current exercise details and (optionally) `promptOverride`, calls Gemini to obtain a JSON proposal; otherwise uses the supplied llmText (for deterministic testing); validates fields; records a DetailProposal with status := "pending"; does not modify the exercise; returns the proposal id and the normalized details derived from the AI response for convenience
 
 - applyDetails (proposal: DetailProposal, actorIsAdmin: Boolean): ()
   - requires actorIsAdmin = true; a pending DetailProposal exists with id = proposal

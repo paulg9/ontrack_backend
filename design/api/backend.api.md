@@ -103,7 +103,15 @@ Request Body:
 ```
 Success Response Body:
 ```json
-{ "proposal": "ID" }
+{
+  "proposal": "ID",
+  "details": {
+    "videoUrl": "string|null",
+    "cues": "string",
+    "recommendedFreq": 0,
+    "confidence_0_1": 0
+  }
+}
 ```
 
 ### POST /api/ExerciseLibrary/applyDetails
