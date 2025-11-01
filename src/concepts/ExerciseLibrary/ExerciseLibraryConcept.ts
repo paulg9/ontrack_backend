@@ -14,7 +14,6 @@ const PREFIX = "ExerciseLibrary";
  * - title String
  * - videoUrl String (optional)
  * - cues String
- * - recommendedFreq Number (integer 0..14)
  * - deprecated Flag
  */
 interface ExerciseDoc {
@@ -22,7 +21,6 @@ interface ExerciseDoc {
   title: string;
   videoUrl?: string;
   cues: string;
-  recommendedFreq: number;
   deprecated: boolean;
 }
 
@@ -32,7 +30,6 @@ interface ExerciseDoc {
  * - createdAt DateTime (ISO string)
  * - videoUrl String (optional)
  * - cues String
- * - recommendedFreq Number (integer 0..14)
  * - confidence_0_1 Number (0..1)
  * - status Enum {"pending","applied","discarded"}
  */
@@ -42,7 +39,6 @@ interface ProposalDoc {
   createdAt: string;
   videoUrl?: string;
   cues: string;
-  recommendedFreq: number;
   confidence_0_1: number;
   status: "pending" | "applied" | "discarded";
 }
@@ -50,8 +46,6 @@ interface ProposalDoc {
 // Validation constants
 const MAX_CUES_LENGTH = 400;
 const MAX_URL_LENGTH = 2048;
-const FREQ_MIN = 0;
-const FREQ_MAX = 14;
 
 // Module-level helpers (not exposed as HTTP endpoints)
 function isNonEmpty(value: unknown): value is string {
@@ -65,15 +59,6 @@ function validateCues(cues: string): string | undefined {
   }
   if (/<\/?[a-z][\s\S]*>/i.test(cues) || /<script/i.test(cues)) {
     return "cues must not contain HTML";
-  }
-  return undefined;
-}
-
-function validateFrequency(value: number): string | undefined {
-  if (!Number.isFinite(value)) return "recommendedFreq must be a finite number";
-  if (!Number.isInteger(value)) return "recommendedFreq must be an integer";
-  if (value < FREQ_MIN || value > FREQ_MAX) {
-    return `recommendedFreq must be between ${FREQ_MIN} and ${FREQ_MAX}`;
   }
   return undefined;
 }
@@ -100,7 +85,6 @@ Return ONLY a JSON object with this exact shape:
 {
   "videoUrl": optional_string_or_null,
   "cues": string_nonempty,
-  "recommendedFreq": integer_${FREQ_MIN}_to_${FREQ_MAX},
   "confidence_0_1": number_between_0_and_1
 }
 Context:
@@ -108,11 +92,9 @@ Context:
 - title: ${exercise.title}
 - current videoUrl: ${exercise.videoUrl ?? "none"}
 - current cues: ${exercise.cues || "none"}
-- current recommendedFreq: ${exercise.recommendedFreq}
 Guidelines:
 - If unsure about videoUrl, return null for videoUrl.
 - Provide concise, safe, actionable cues in 1-3 sentences, no HTML or Markdown.
-- recommendedFreq must be an integer between ${FREQ_MIN} and ${FREQ_MAX} inclusive.
 - Do not include any text outside the JSON object. No backticks, no labels, no explanations.
 `;
 }
@@ -192,22 +174,20 @@ export default class ExerciseLibraryConcept {
   }
 
   /**
-   * addExercise (title: String, videoUrl?: Optional String, cues: String, recommendedFreq: Number, actorIsAdmin: Boolean): (exercise: Exercise)
+   * addExercise (title: String, videoUrl?: Optional String, cues: String, actorIsAdmin: Boolean): (exercise: Exercise)
    *
-   * requires actorIsAdmin = true; title non-empty; 0 <= recommendedFreq <= 14 and integer
+   * requires actorIsAdmin = true; title non-empty
    * effects creates a new Exercise with deprecated := false; returns its id as exercise
    */
   async addExercise({
     title,
     videoUrl,
     cues,
-    recommendedFreq,
     actorIsAdmin,
   }: {
     title: string;
     videoUrl?: string;
     cues: string;
-    recommendedFreq: number;
     actorIsAdmin: boolean;
   }): Promise<{ exercise: Exercise } | { error: string }> {
     if (!actorIsAdmin) return { error: "Action requires Administrator" };
@@ -216,8 +196,6 @@ export default class ExerciseLibraryConcept {
     }
     const cuesCheck = validateCues(cues);
     if (cuesCheck) return { error: cuesCheck };
-    const freqCheck = validateFrequency(recommendedFreq);
-    if (freqCheck) return { error: freqCheck };
     const urlResult = normalizeUrl(videoUrl);
     if (urlResult.error) return { error: urlResult.error };
 
@@ -227,7 +205,6 @@ export default class ExerciseLibraryConcept {
       title: title.trim(),
       videoUrl: urlResult.url,
       cues: cues.trim(),
-      recommendedFreq,
       deprecated: false,
     };
     await this.exercises.insertOne(doc);
@@ -238,7 +215,7 @@ export default class ExerciseLibraryConcept {
    * addExerciseDraft (title: String, actorIsAdmin: Boolean): (exercise: Exercise)
    *
    * requires actorIsAdmin = true; title non-empty
-   * effects creates a new Exercise with minimal details (videoUrl := empty, cues := empty, recommendedFreq := 0, deprecated := false); returns its id as exercise
+   * effects creates a new Exercise with minimal details (videoUrl := empty, cues := empty, deprecated := false); returns its id as exercise
    */
   async addExerciseDraft(
     { title, actorIsAdmin }: { title: string; actorIsAdmin: boolean },
@@ -252,7 +229,6 @@ export default class ExerciseLibraryConcept {
       _id: exerciseId,
       title: title.trim(),
       cues: "",
-      recommendedFreq: 0,
       deprecated: false,
     };
     await this.exercises.insertOne(doc);
@@ -260,7 +236,7 @@ export default class ExerciseLibraryConcept {
   }
 
   /**
-   * updateExercise (exercise: Exercise, title?: String, videoUrl?: Optional String, cues?: String, recommendedFreq?: Number, actorIsAdmin: Boolean): ()
+   * updateExercise (exercise: Exercise, title?: String, videoUrl?: Optional String, cues?: String, actorIsAdmin: Boolean): ()
    *
    * requires actorIsAdmin = true; exercise exists
    * effects updates supplied optional fields on the exercise
@@ -270,14 +246,12 @@ export default class ExerciseLibraryConcept {
     title,
     videoUrl,
     cues,
-    recommendedFreq,
     actorIsAdmin,
   }: {
     exercise: Exercise;
     title?: string;
     videoUrl?: string | null;
     cues?: string;
-    recommendedFreq?: number;
     actorIsAdmin?: boolean;
   }): Promise<Empty | { error: string }> {
     if (!actorIsAdmin) return { error: "Action requires Administrator" };
@@ -308,11 +282,6 @@ export default class ExerciseLibraryConcept {
       const cuesCheck = validateCues(cues);
       if (cuesCheck) return { error: cuesCheck };
       update.$set.cues = cues.trim();
-    }
-    if (recommendedFreq !== undefined) {
-      const freqCheck = validateFrequency(recommendedFreq);
-      if (freqCheck) return { error: freqCheck };
-      update.$set.recommendedFreq = recommendedFreq;
     }
 
     if (Object.keys(update.$set).length === 0 && !update.$unset) return {};
@@ -361,7 +330,6 @@ export default class ExerciseLibraryConcept {
       details: {
         videoUrl: string | null;
         cues: string;
-        recommendedFreq: number;
         confidence_0_1: number;
       };
     } | { error: string }
@@ -402,28 +370,16 @@ export default class ExerciseLibraryConcept {
     const cuesCheck = validateCues(cuesVal);
     if (cuesCheck) return { error: cuesCheck };
 
-    const freqRaw = typeof parsed.recommendedFreq === "number"
-      ? parsed.recommendedFreq
-      : Number(parsed.recommendedFreq);
-    if (!Number.isFinite(freqRaw)) {
-      return { error: "recommendedFreq must be a number" };
-    }
-    if (!Number.isInteger(freqRaw)) {
-      return { error: "recommendedFreq must be an integer" };
-    }
-    const freqVal = freqRaw;
-    const freqCheck = validateFrequency(freqVal);
-    if (freqCheck) return { error: freqCheck };
-
-    let conf = typeof parsed.confidence_0_1 === "number"
+    const confRaw = typeof parsed.confidence_0_1 === "number"
       ? parsed.confidence_0_1
-      : Number(parsed.confidence_0_1 ?? 0);
-    if (!Number.isFinite(conf)) conf = 0;
-    if (conf < 0) conf = 0;
-    if (conf > 1) conf = 1;
-    if (!(conf >= 0 && conf <= 1)) {
+      : Number(parsed.confidence_0_1 ?? Number.NaN);
+    if (!Number.isFinite(confRaw)) {
+      return { error: "confidence_0_1 must be a number" };
+    }
+    if (confRaw < 0 || confRaw > 1) {
       return { error: "confidence_0_1 must be between 0 and 1" };
     }
+    const conf = confRaw;
 
     const urlNorm = normalizeUrl(
       typeof parsed.videoUrl === "string" ? parsed.videoUrl : undefined,
@@ -437,7 +393,6 @@ export default class ExerciseLibraryConcept {
       createdAt: new Date().toISOString(),
       videoUrl: urlNorm.url,
       cues: cuesVal.trim(),
-      recommendedFreq: freqVal,
       confidence_0_1: conf,
       status: "pending",
     };
@@ -447,7 +402,6 @@ export default class ExerciseLibraryConcept {
       details: {
         videoUrl: doc.videoUrl ?? null,
         cues: doc.cues,
-        recommendedFreq: doc.recommendedFreq,
         confidence_0_1: doc.confidence_0_1,
       },
     };
@@ -472,12 +426,20 @@ export default class ExerciseLibraryConcept {
     const exercise = await this.exercises.findOne({ _id: prop.exercise });
     if (!exercise) return { error: `exercise ${prop.exercise} does not exist` };
 
-    const update: { $set: Partial<Omit<ExerciseDoc, "_id">> } = { $set: {} };
-    if (prop.videoUrl !== undefined && prop.videoUrl.trim().length > 0) {
-      update.$set.videoUrl = prop.videoUrl;
+    const update: {
+      $set: Partial<Omit<ExerciseDoc, "_id">>;
+      $unset?: { videoUrl?: "" };
+    } = { $set: {} };
+
+    const proposalVideoUrl = prop.videoUrl ?? null;
+    if (
+      typeof proposalVideoUrl === "string" && proposalVideoUrl.trim().length > 0
+    ) {
+      update.$set.videoUrl = proposalVideoUrl;
+    } else if (proposalVideoUrl === null) {
+      update.$unset = { videoUrl: "" };
     }
     update.$set.cues = prop.cues;
-    update.$set.recommendedFreq = prop.recommendedFreq;
     await this.exercises.updateOne({ _id: prop.exercise }, update);
 
     await this.detailProposals.updateOne({ _id: proposal }, {

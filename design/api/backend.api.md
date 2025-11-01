@@ -20,8 +20,7 @@ those proposals.
 
 Description: Create a fully-specified exercise. Requirements:
 
-- `actorIsAdmin = true`; `title` non-empty; `recommendedFreq` integer in [0, 14]
-  Effects:
+- `actorIsAdmin = true`; `title` non-empty Effects:
 - Creates Exercise (`deprecated := false`) and returns its id Request Body:
 
 ```json
@@ -29,7 +28,6 @@ Description: Create a fully-specified exercise. Requirements:
   "title": "string",
   "videoUrl": "string (optional)",
   "cues": "string",
-  "recommendedFreq": 0,
   "actorIsAdmin": true
 }
 ```
@@ -62,8 +60,7 @@ Success Response Body:
 Description: Update optional exercise fields. Requirements:
 
 - `actorIsAdmin = true`; `exercise` exists; if provided: `title` non-empty;
-  `recommendedFreq` integer in [0, 14]; `videoUrl` http/https or `null` to clear
-  Effects:
+  `videoUrl` http/https or `null` to clear Effects:
 - Updates provided fields Request Body:
 
 ```json
@@ -72,7 +69,6 @@ Description: Update optional exercise fields. Requirements:
   "title": "string (optional)",
   "videoUrl": "string|null (optional)",
   "cues": "string (optional)",
-  "recommendedFreq": 0,
   "actorIsAdmin": true
 }
 ```
@@ -106,8 +102,8 @@ Description: Generate (via Gemini) or record AI-proposed details for an
 exercise. Requirements:
 
 - `actorIsAdmin = true`; `exercise` exists; the server must have
-  `GEMINI_API_KEY` configured; cues non-empty/no HTML/≤400; freq integer 0..14;
-  url http/https; confidence in [0,1] Effects:
+  `GEMINI_API_KEY` configured; cues non-empty/no HTML/≤400; url http/https;
+  confidence in [0,1] Effects:
 - The server calls Gemini with the current exercise details, stores the proposed
   details as a pending `DetailProposal`, and returns its id along with the
   normalized details. Request Body:
@@ -127,7 +123,6 @@ Success Response Body:
   "details": {
     "videoUrl": "string|null",
     "cues": "string",
-    "recommendedFreq": 0,
     "confidence_0_1": 0
   }
 }
@@ -184,7 +179,6 @@ Success Response Body (Query):
     "title": "string",
     "videoUrl": "string (optional)",
     "cues": "string",
-    "recommendedFreq": 0,
     "deprecated": false
   }
 ]
@@ -207,7 +201,6 @@ Success Response Body (Query):
     "title": "string",
     "videoUrl": "string (optional)",
     "cues": "string",
-    "recommendedFreq": 0,
     "deprecated": false
   }
 ]
@@ -231,7 +224,6 @@ Success Response Body (Query):
     "createdAt": "ISO-8601 string",
     "videoUrl": "string (optional)",
     "cues": "string",
-    "recommendedFreq": 0,
     "confidence_0_1": 0.8,
     "status": "pending"
   }
@@ -256,7 +248,6 @@ Success Response Body (Query):
     "createdAt": "ISO-8601 string",
     "videoUrl": "string (optional)",
     "cues": "string",
-    "recommendedFreq": 0,
     "confidence_0_1": 0.8,
     "status": "pending"
   }

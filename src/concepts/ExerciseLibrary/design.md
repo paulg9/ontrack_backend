@@ -29,8 +29,9 @@
 
 - Validation and guardrails
   - Maintained and clarified validators from the prior version: safe cues (no
-    HTML, max length 400), URL normalization (http/https, length ≤ 2048),
-    integer frequency in [0..14].
+    HTML, max length 400) and URL normalization (http/https, length ≤ 2048).
+  - Removed the `recommendedFreq` field entirely so intensity/frequency is owned
+    by `RehabPlan`; proposals now focus on media cues plus confidence only.
   - Tightened return-shape consistency: normal errors return `{error: string}`
     rather than throw; only truly exceptional scenarios would throw (none
     expected here).

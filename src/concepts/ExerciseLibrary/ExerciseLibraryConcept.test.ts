@@ -45,7 +45,6 @@ Deno.test("ExerciseLibrary principle: populate, browse, and deprecate", async ()
       title: "Push-ups",
       videoUrl: "https://example.com/pushups.mp4",
       cues: "Body straight, lower until chest nearly touches floor.",
-      recommendedFreq: 3,
       actorIsAdmin: true,
     });
     assert("exercise" in add1);
@@ -60,7 +59,6 @@ Deno.test("ExerciseLibrary principle: populate, browse, and deprecate", async ()
       exercise: (draft as any).exercise,
       videoUrl: "https://example.com/plank.mp4",
       cues: "Maintain neutral spine; engage core; breathe steadily.",
-      recommendedFreq: 5,
       actorIsAdmin: true,
     });
     assert(!("error" in upd));
@@ -85,8 +83,8 @@ Deno.test("ExerciseLibrary principle: populate, browse, and deprecate", async ()
 
 Deno.test("LLM proposal flow: propose, apply, discard", async () => {
   const stub = new StubLLMClient([
-    '{"videoUrl":"https://example.com/burpees.mp4","cues":"Explosive full-body; land softly; keep core tight.","recommendedFreq":4,"confidence_0_1":0.8}',
-    '{"videoUrl":null,"cues":"Keep form crisp.","recommendedFreq":3,"confidence_0_1":0.6}',
+    '{"videoUrl":"https://example.com/burpees.mp4","cues":"Explosive full-body; land softly; keep core tight.","confidence_0_1":0.8}',
+    '{"videoUrl":null,"cues":"Keep form crisp.","confidence_0_1":0.6}',
   ]);
 
   await withDb(async (concept) => {
@@ -98,7 +96,6 @@ Deno.test("LLM proposal flow: propose, apply, discard", async () => {
     // Propose via Gemini (stubbed)
     const prop = await concept.proposeDetails({ exercise, actorIsAdmin: true });
     assert("proposal" in prop);
-    assertEquals(prop.details.recommendedFreq, 4);
     assertEquals(prop.details.videoUrl, "https://example.com/burpees.mp4");
 
     // Apply
@@ -116,7 +113,6 @@ Deno.test("LLM proposal flow: propose, apply, discard", async () => {
       doc.cues,
       "Explosive full-body; land softly; keep core tight.",
     );
-    assertEquals(doc.recommendedFreq, 4);
 
     // New pending proposal then discard
     const prop2 = await concept.proposeDetails({
@@ -134,16 +130,15 @@ Deno.test("LLM proposal flow: propose, apply, discard", async () => {
   }, stub);
 });
 
-Deno.test("Validation: bad URL, HTML cues, out-of-range and non-integer freq", async () => {
+Deno.test("Validation: bad URL, HTML cues, malformed confidence", async () => {
   const longCues = "safe ".repeat(101);
   const stub = new StubLLMClient([
-    '{"videoUrl":"ftp://x","cues":"<b>Strong</b> core","recommendedFreq":3,"confidence_0_1":0.9}',
-    '{"videoUrl":null,"cues":"Neutral spine.","recommendedFreq":20,"confidence_0_1":0.7}',
-    '{"videoUrl":null,"cues":"Controlled movement.","recommendedFreq":2.5,"confidence_0_1":0.8}',
+    '{"videoUrl":"ftp://x","cues":"<b>Strong</b> core","confidence_0_1":0.9}',
+    '{"videoUrl":null,"cues":"Neutral spine.","confidence_0_1":"bad"}',
+    '{"videoUrl":null,"cues":"Controlled movement.","confidence_0_1":1.7}',
     JSON.stringify({
       videoUrl: null,
       cues: longCues,
-      recommendedFreq: 3,
       confidence_0_1: 0.9,
     }),
   ]);
@@ -158,11 +153,11 @@ Deno.test("Validation: bad URL, HTML cues, out-of-range and non-integer freq", a
     let res = await concept.proposeDetails({ exercise, actorIsAdmin: true });
     assert("error" in res);
 
-    // Out-of-range freq
+    // Non-numeric confidence
     res = await concept.proposeDetails({ exercise, actorIsAdmin: true });
     assert("error" in res);
 
-    // Non-integer freq
+    // Out of bounds confidence
     res = await concept.proposeDetails({ exercise, actorIsAdmin: true });
     assert("error" in res);
 
@@ -178,7 +173,6 @@ Deno.test("Update semantics: clear videoUrl and partial updates", async () => {
       title: "Jumping Jacks",
       videoUrl: "https://example.com/jj.mp4",
       cues: "Spread arms and legs; rhythmical.",
-      recommendedFreq: 3,
       actorIsAdmin: true,
     });
     const exercise = (add as any).exercise;
@@ -193,17 +187,15 @@ Deno.test("Update semantics: clear videoUrl and partial updates", async () => {
     let [doc] = await concept._getExerciseById({ exercise });
     assertEquals(doc.videoUrl, undefined);
 
-    // Title change and freq
+    // Title change
     upd = await concept.updateExercise({
       exercise,
       title: "Jumping Jacks v2",
-      recommendedFreq: 4,
       actorIsAdmin: true,
     });
     assert(!("error" in upd));
     [doc] = await concept._getExerciseById({ exercise });
     assertEquals(doc.title, "Jumping Jacks v2");
-    assertEquals(doc.recommendedFreq, 4);
   });
 });
 
@@ -252,7 +244,6 @@ Deno.test("Admin gating: mutations require actorIsAdmin", async () => {
     const addFail = await concept.addExercise({
       title: "A",
       cues: "C",
-      recommendedFreq: 1,
       actorIsAdmin: false,
     });
     assert("error" in addFail);

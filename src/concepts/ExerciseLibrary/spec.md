@@ -13,7 +13,6 @@ proposals; no changes occur to the exercise without an explicit apply.
   - a title String
   - an optional videoUrl String
   - a cues String
-  - a recommendedFreq Number // sessions per week (integer 0..14)
   - a deprecated Flag // default false
 
 - a set of DetailProposals with
@@ -21,7 +20,6 @@ proposals; no changes occur to the exercise without an explicit apply.
   - a createdAt DateTime
   - an optional videoUrl String
   - a cues String
-  - a recommendedFreq Number // integer 0..14
   - a confidence_0_1 Number // 0..1
   - a status Enum {"pending","applied","discarded"}
 
@@ -33,20 +31,18 @@ invariants
 **Actions**
 
 - addExercise (title: String, videoUrl?: Optional String, cues: String,
-  recommendedFreq: Number, actorIsAdmin: Boolean): (exercise: Exercise)
-  - requires actorIsAdmin = true; title non-empty; 0 <= recommendedFreq <= 14
-    and integer
+  actorIsAdmin: Boolean): (exercise: Exercise)
+  - requires actorIsAdmin = true; title non-empty
   - effects creates a new Exercise with deprecated := false; returns its id as
     exercise
 
 - addExerciseDraft (title: String, actorIsAdmin: Boolean): (exercise: Exercise)
   - requires actorIsAdmin = true; title non-empty
   - effects creates a new Exercise with minimal details (videoUrl := empty, cues
-    := empty, recommendedFreq := 0, deprecated := false); returns its id as
-    exercise
+    := empty, deprecated := false); returns its id as exercise
 
 - updateExercise (exercise: Exercise, title?: String, videoUrl?: Optional
-  String, cues?: String, recommendedFreq?: Number, actorIsAdmin: Boolean): ()
+  String, cues?: String, actorIsAdmin: Boolean): ()
   - requires actorIsAdmin = true; exercise exists
   - effects updates supplied optional fields on the exercise
 
@@ -57,7 +53,7 @@ invariants
 
 - proposeDetails (exercise: Exercise, actorIsAdmin: Boolean): (proposal:
   DetailProposal, details: {videoUrl?: Optional String, cues: String,
-  recommendedFreq: Number, confidence_0_1: Number})
+  confidence_0_1: Number})
   - requires actorIsAdmin = true; exercise exists; the environment variable
     `GEMINI_API_KEY` is configured
   - effects composes a fixed prompt from the current exercise fields, calls
@@ -73,7 +69,6 @@ invariants
     - if proposal.videoUrl is present and non-empty, set exercise.videoUrl :=
       proposal.videoUrl
     - set exercise.cues := proposal.cues
-    - set exercise.recommendedFreq := proposal.recommendedFreq
     - set proposal.status := "applied"
 
 - discardDetails (proposal: DetailProposal, actorIsAdmin: Boolean): ()
@@ -84,10 +79,9 @@ invariants
 **Queries**
 
 - _getExerciseById (exercise: Exercise): (exercise: {title: String, videoUrl?:
-  Optional String, cues: String, recommendedFreq: Number, deprecated: Flag})
+  Optional String, cues: String, deprecated: Flag})
 - _listExercises (includeDeprecated?: Flag): (exercise: {exercise: Exercise,
-  title: String, videoUrl?: Optional String, cues: String, recommendedFreq:
-  Number, deprecated: Flag})
+  title: String, videoUrl?: Optional String, cues: String, deprecated: Flag})
 - _listProposals (status?: String): (proposal: {proposal: DetailProposal,
   exercise: Exercise, createdAt: DateTime, videoUrl?: Optional String, cues:
-  String, recommendedFreq: Number, confidence_0_1: Number, status: String})
+  String, confidence_0_1: Number, status: String})
