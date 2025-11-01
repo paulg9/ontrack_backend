@@ -51,7 +51,8 @@ const MAX_CUES_LENGTH = 400;
 const MAX_URL_LENGTH = 2048;
 const FREQ_MIN = 0;
 const FREQ_MAX = 14;
-const GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent";
+const GEMINI_ENDPOINT =
+  "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent";
 
 // Module-level helpers (not exposed as HTTP endpoints)
 function isNonEmpty(value: unknown): value is string {
@@ -85,15 +86,17 @@ function normalizeUrl(input?: string): { url?: string; error?: string } {
   if (trimmed.length > MAX_URL_LENGTH) return { error: "videoUrl is too long" };
   try {
     const u = new URL(trimmed);
-    if (u.protocol !== "http:" && u.protocol !== "https:") return { error: "videoUrl must use http or https" };
+    if (u.protocol !== "http:" && u.protocol !== "https:") {
+      return { error: "videoUrl must use http or https" };
+    }
     return { url: u.toString() };
   } catch {
     return { error: "videoUrl is not a valid URL" };
   }
 }
 
-function buildGeminiPrompt(exercise: ExerciseDoc, promptOverride?: string): string {
-  const base = `You are an expert exercise coach. Propose missing details for an exercise.
+function createProposalPrompt(exercise: ExerciseDoc): string {
+  return `You are an expert exercise coach. Propose missing details for an exercise.
 Return ONLY a JSON object with this exact shape:
 {
   "videoUrl": optional_string_or_null,
@@ -108,16 +111,11 @@ Context:
 - current cues: ${exercise.cues || "none"}
 - current recommendedFreq: ${exercise.recommendedFreq}
 Guidelines:
-- If unsure about videoUrl, return null.
-- Provide concise, safe, actionable cues (<= ${MAX_CUES_LENGTH} chars), no HTML/Markdown.
+- If unsure about videoUrl, return null for videoUrl.
+- Provide concise, safe, actionable cues in 1-3 sentences, no HTML or Markdown.
 - recommendedFreq must be an integer between ${FREQ_MIN} and ${FREQ_MAX} inclusive.
-- Do not include any text outside the JSON object. No backticks, no labels, no explanations.`;
-  return promptOverride && promptOverride.trim().length > 0
-    ? `${base}
-
-Additional instructions from administrator:
-${promptOverride.trim()}`
-    : base;
+- Do not include any text outside the JSON object. No backticks, no labels, no explanations.
+`;
 }
 
 function extractTextFromGeminiResponse(resp: any): string | undefined {
@@ -132,23 +130,95 @@ function extractTextFromGeminiResponse(resp: any): string | undefined {
         }
       }
     }
-    if (typeof candidate?.text === "string" && candidate.text.trim().length > 0) {
+    if (
+      typeof candidate?.text === "string" && candidate.text.trim().length > 0
+    ) {
       return candidate.text;
     }
-    if (typeof candidate?.output === "string" && candidate.output.trim().length > 0) {
+    if (
+      typeof candidate?.output === "string" &&
+      candidate.output.trim().length > 0
+    ) {
       return candidate.output;
     }
   }
   return undefined;
 }
 
+export interface ExerciseLibraryLLMClient {
+  generateProposal(prompt: string): Promise<string>;
+}
+
+class GeminiLLMClient implements ExerciseLibraryLLMClient {
+  async generateProposal(prompt: string): Promise<string> {
+    const apiKey = Deno.env.get("GEMINI_API_KEY");
+    if (!apiKey) {
+      throw new Error("GEMINI_API_KEY not configured on the server");
+    }
+
+    let response: Response;
+    try {
+      response = await fetch(`${GEMINI_ENDPOINT}?key=${apiKey}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [{ text: prompt }],
+            },
+          ],
+        }),
+      });
+    } catch (err) {
+      throw new Error(
+        `Failed to reach Gemini: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+
+    let payload: any;
+    try {
+      payload = await response.json();
+    } catch (err) {
+      throw new Error(
+        `Unable to parse Gemini response: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+
+    if (!response.ok) {
+      const detail = payload?.error?.message ?? JSON.stringify(payload);
+      throw new Error(`Gemini API error (${response.status}): ${detail}`);
+    }
+
+    const text = extractTextFromGeminiResponse(payload);
+    if (!text || text.trim().length === 0) {
+      throw new Error("Gemini response did not contain any text output.");
+    }
+    return text;
+  }
+}
+
 export default class ExerciseLibraryConcept {
   public readonly exercises: Collection<ExerciseDoc>;
   public readonly detailProposals: Collection<ProposalDoc>;
+  private llmClient: ExerciseLibraryLLMClient;
 
-  constructor(db: Db) {
+  constructor(db: Db, llmClient?: ExerciseLibraryLLMClient) {
     this.exercises = db.collection<ExerciseDoc>(`${PREFIX}.exercises`);
-    this.detailProposals = db.collection<ProposalDoc>(`${PREFIX}.detailProposals`);
+    this.detailProposals = db.collection<ProposalDoc>(
+      `${PREFIX}.detailProposals`,
+    );
+    this.llmClient = llmClient ?? new GeminiLLMClient();
+  }
+
+  /**
+   * Test helper to inject a stubbed LLM client.
+   */
+  setLLMClientForTesting(llmClient: ExerciseLibraryLLMClient) {
+    this.llmClient = llmClient;
   }
 
   /**
@@ -171,7 +241,9 @@ export default class ExerciseLibraryConcept {
     actorIsAdmin: boolean;
   }): Promise<{ exercise: Exercise } | { error: string }> {
     if (!actorIsAdmin) return { error: "Action requires Administrator" };
-    if (!isNonEmpty(title)) return { error: "title must be a non-empty string" };
+    if (!isNonEmpty(title)) {
+      return { error: "title must be a non-empty string" };
+    }
     const cuesCheck = validateCues(cues);
     if (cuesCheck) return { error: cuesCheck };
     const freqCheck = validateFrequency(recommendedFreq);
@@ -198,9 +270,13 @@ export default class ExerciseLibraryConcept {
    * requires actorIsAdmin = true; title non-empty
    * effects creates a new Exercise with minimal details (videoUrl := empty, cues := empty, recommendedFreq := 0, deprecated := false); returns its id as exercise
    */
-  async addExerciseDraft({ title, actorIsAdmin }: { title: string; actorIsAdmin: boolean }): Promise<{ exercise: Exercise } | { error: string }> {
+  async addExerciseDraft(
+    { title, actorIsAdmin }: { title: string; actorIsAdmin: boolean },
+  ): Promise<{ exercise: Exercise } | { error: string }> {
     if (!actorIsAdmin) return { error: "Action requires Administrator" };
-    if (!isNonEmpty(title)) return { error: "title must be a non-empty string" };
+    if (!isNonEmpty(title)) {
+      return { error: "title must be a non-empty string" };
+    }
     const exerciseId = freshID() as Exercise;
     const doc: ExerciseDoc = {
       _id: exerciseId,
@@ -238,10 +314,15 @@ export default class ExerciseLibraryConcept {
     const existing = await this.exercises.findOne({ _id: exercise });
     if (!existing) return { error: `exercise ${exercise} does not exist` };
 
-    const update: { $set: Partial<Omit<ExerciseDoc, "_id">>; $unset?: { videoUrl?: "" } } = { $set: {} };
+    const update: {
+      $set: Partial<Omit<ExerciseDoc, "_id">>;
+      $unset?: { videoUrl?: "" };
+    } = { $set: {} };
 
     if (title !== undefined) {
-      if (!isNonEmpty(title)) return { error: "title must be a non-empty string" };
+      if (!isNonEmpty(title)) {
+        return { error: "title must be a non-empty string" };
+      }
       update.$set.title = title.trim();
     }
     if (videoUrl !== undefined) {
@@ -279,83 +360,52 @@ export default class ExerciseLibraryConcept {
    * requires actorIsAdmin = true; exercise exists
    * effects sets deprecated := true
    */
-  async deprecateExercise({ exercise, actorIsAdmin }: { exercise: Exercise; actorIsAdmin: boolean }): Promise<Empty | { error: string }> {
+  async deprecateExercise(
+    { exercise, actorIsAdmin }: { exercise: Exercise; actorIsAdmin: boolean },
+  ): Promise<Empty | { error: string }> {
     if (!actorIsAdmin) return { error: "Action requires Administrator" };
-    const res = await this.exercises.updateOne({ _id: exercise }, { $set: { deprecated: true } });
-    if (res.matchedCount === 0) return { error: `exercise ${exercise} does not exist` };
+    const res = await this.exercises.updateOne({ _id: exercise }, {
+      $set: { deprecated: true },
+    });
+    if (res.matchedCount === 0) {
+      return { error: `exercise ${exercise} does not exist` };
+    }
     return {};
   }
 
   /**
-   * proposeDetails (exercise: Exercise, actorIsAdmin: Boolean, promptOverride?: String, llmText?: String): (proposal: DetailProposal)
+   * proposeDetails (exercise: Exercise, actorIsAdmin: Boolean): (proposal: DetailProposal)
    *
-   * requires actorIsAdmin = true; exercise exists; if llmText is not provided, the environment variable GEMINI_API_KEY must be configured
-   * effects generates (via Gemini when llmText absent) or parses detail JSON; validates fields; records a DetailProposal with status := "pending"; returns proposal id
+   * requires actorIsAdmin = true; exercise exists; environment variable GEMINI_API_KEY must be configured
+   * effects generates detail JSON via Gemini, validates fields, records a pending DetailProposal, and returns the proposal id plus the normalized details
    */
   async proposeDetails({
     exercise,
-    llmText,
-    promptOverride,
     actorIsAdmin,
   }: {
     exercise: Exercise;
-    llmText?: string;
-    promptOverride?: string;
     actorIsAdmin: boolean;
-  }): Promise<{ proposal: Proposal; details: { videoUrl: string | null; cues: string; recommendedFreq: number; confidence_0_1: number } } | { error: string }> {
+  }): Promise<
+    {
+      proposal: Proposal;
+      details: {
+        videoUrl: string | null;
+        cues: string;
+        recommendedFreq: number;
+        confidence_0_1: number;
+      };
+    } | { error: string }
+  > {
     if (!actorIsAdmin) return { error: "Action requires Administrator" };
     const existing = await this.exercises.findOne({ _id: exercise });
     if (!existing) return { error: `exercise ${exercise} does not exist` };
 
-    let llmResponse = llmText;
-    if (!llmResponse) {
-      const apiKey = Deno.env.get("GEMINI_API_KEY");
-      if (!apiKey) {
-        return { error: "AI augmentation requires GEMINI_API_KEY to be configured on the server." };
-      }
-
-      const prompt = buildGeminiPrompt(existing, promptOverride);
-      let response: Response;
-      try {
-        response = await fetch(`${GEMINI_ENDPOINT}?key=${apiKey}`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            contents: [
-              {
-                parts: [{ text: prompt }],
-              },
-            ],
-          }),
-        });
-      } catch (err) {
-        return { error: `Failed to contact Gemini: ${err instanceof Error ? err.message : String(err)}` };
-      }
-
-      if (!response.ok) {
-        let details = "";
-        try {
-          const errorJson = await response.json();
-          details = errorJson?.error?.message ?? JSON.stringify(errorJson);
-        } catch {
-          details = await response.text().catch(() => "");
-        }
-        return { error: `Gemini API error (${response.status}): ${details || "Unknown error"}` };
-      }
-
-      let payload: any;
-      try {
-        payload = await response.json();
-      } catch (err) {
-        return { error: `Unable to parse Gemini response: ${err instanceof Error ? err.message : String(err)}` };
-      }
-
-      llmResponse = extractTextFromGeminiResponse(payload);
-      if (!llmResponse) {
-        return { error: "Gemini response did not contain any text output." };
-      }
+    let llmResponse: string;
+    try {
+      const prompt = createProposalPrompt(existing);
+      llmResponse = await this.llmClient.generateProposal(prompt);
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err) };
     }
 
     const match = llmResponse.match(/\{[\s\S]*\}/);
@@ -394,13 +444,19 @@ export default class ExerciseLibraryConcept {
     const freqCheck = validateFrequency(freqVal);
     if (freqCheck) return { error: freqCheck };
 
-    let conf = typeof parsed.confidence_0_1 === "number" ? parsed.confidence_0_1 : Number(parsed.confidence_0_1 ?? 0);
+    let conf = typeof parsed.confidence_0_1 === "number"
+      ? parsed.confidence_0_1
+      : Number(parsed.confidence_0_1 ?? 0);
     if (!Number.isFinite(conf)) conf = 0;
     if (conf < 0) conf = 0;
     if (conf > 1) conf = 1;
-    if (!(conf >= 0 && conf <= 1)) return { error: "confidence_0_1 must be between 0 and 1" };
+    if (!(conf >= 0 && conf <= 1)) {
+      return { error: "confidence_0_1 must be between 0 and 1" };
+    }
 
-    const urlNorm = normalizeUrl(typeof parsed.videoUrl === "string" ? parsed.videoUrl : undefined);
+    const urlNorm = normalizeUrl(
+      typeof parsed.videoUrl === "string" ? parsed.videoUrl : undefined,
+    );
     if (urlNorm.error) return { error: urlNorm.error };
 
     const proposalId = freshID() as Proposal;
@@ -432,22 +488,30 @@ export default class ExerciseLibraryConcept {
    * requires actorIsAdmin = true; a pending proposal exists
    * effects merges proposal fields into exercise and marks proposal as applied
    */
-  async applyDetails({ proposal, actorIsAdmin }: { proposal: Proposal; actorIsAdmin: boolean }): Promise<Empty | { error: string }> {
+  async applyDetails(
+    { proposal, actorIsAdmin }: { proposal: Proposal; actorIsAdmin: boolean },
+  ): Promise<Empty | { error: string }> {
     if (!actorIsAdmin) return { error: "Action requires Administrator" };
     const prop = await this.detailProposals.findOne({ _id: proposal });
     if (!prop) return { error: `proposal ${proposal} does not exist` };
-    if (prop.status !== "pending") return { error: `proposal ${proposal} is not pending` };
+    if (prop.status !== "pending") {
+      return { error: `proposal ${proposal} is not pending` };
+    }
 
     const exercise = await this.exercises.findOne({ _id: prop.exercise });
     if (!exercise) return { error: `exercise ${prop.exercise} does not exist` };
 
     const update: { $set: Partial<Omit<ExerciseDoc, "_id">> } = { $set: {} };
-    if (prop.videoUrl !== undefined && prop.videoUrl.trim().length > 0) update.$set.videoUrl = prop.videoUrl;
+    if (prop.videoUrl !== undefined && prop.videoUrl.trim().length > 0) {
+      update.$set.videoUrl = prop.videoUrl;
+    }
     update.$set.cues = prop.cues;
     update.$set.recommendedFreq = prop.recommendedFreq;
     await this.exercises.updateOne({ _id: prop.exercise }, update);
 
-    await this.detailProposals.updateOne({ _id: proposal }, { $set: { status: "applied" } });
+    await this.detailProposals.updateOne({ _id: proposal }, {
+      $set: { status: "applied" },
+    });
     return {};
   }
 
@@ -457,12 +521,18 @@ export default class ExerciseLibraryConcept {
    * requires actorIsAdmin = true; a pending proposal exists
    * effects sets proposal.status := "discarded"
    */
-  async discardDetails({ proposal, actorIsAdmin }: { proposal: Proposal; actorIsAdmin: boolean }): Promise<Empty | { error: string }> {
+  async discardDetails(
+    { proposal, actorIsAdmin }: { proposal: Proposal; actorIsAdmin: boolean },
+  ): Promise<Empty | { error: string }> {
     if (!actorIsAdmin) return { error: "Action requires Administrator" };
     const prop = await this.detailProposals.findOne({ _id: proposal });
     if (!prop) return { error: `proposal ${proposal} does not exist` };
-    if (prop.status !== "pending") return { error: `proposal ${proposal} is not pending` };
-    await this.detailProposals.updateOne({ _id: proposal }, { $set: { status: "discarded" } });
+    if (prop.status !== "pending") {
+      return { error: `proposal ${proposal} is not pending` };
+    }
+    await this.detailProposals.updateOne({ _id: proposal }, {
+      $set: { status: "discarded" },
+    });
     return {};
   }
 
@@ -471,7 +541,9 @@ export default class ExerciseLibraryConcept {
   /**
    * _getExerciseById (exercise: Exercise): (exercise: ExerciseDoc)
    */
-  async _getExerciseById({ exercise }: { exercise: Exercise }): Promise<ExerciseDoc[]> {
+  async _getExerciseById(
+    { exercise }: { exercise: Exercise },
+  ): Promise<ExerciseDoc[]> {
     const doc = await this.exercises.findOne({ _id: exercise });
     return doc ? [doc] : [];
   }
@@ -479,15 +551,21 @@ export default class ExerciseLibraryConcept {
   /**
    * _listExercises (includeDeprecated?: Flag): (exercise: ExerciseDoc)
    */
-  async _listExercises({ includeDeprecated = true }: { includeDeprecated?: boolean }): Promise<ExerciseDoc[]> {
-    const filter = includeDeprecated ? {} : { deprecated: { $ne: true } } as any;
+  async _listExercises(
+    { includeDeprecated = true }: { includeDeprecated?: boolean },
+  ): Promise<ExerciseDoc[]> {
+    const filter = includeDeprecated
+      ? {}
+      : { deprecated: { $ne: true } } as any;
     return this.exercises.find(filter).toArray();
   }
 
   /**
    * _listProposals (status?: String): (proposal: ProposalDoc)
    */
-  async _listProposals({ status }: { status?: "pending" | "applied" | "discarded" }): Promise<ProposalDoc[]> {
+  async _listProposals(
+    { status }: { status?: "pending" | "applied" | "discarded" },
+  ): Promise<ProposalDoc[]> {
     const filter = status ? { status } : {};
     return this.detailProposals.find(filter).toArray();
   }
@@ -495,11 +573,9 @@ export default class ExerciseLibraryConcept {
   /**
    * _getProposalsForExercise (exercise: Exercise): (proposal: ProposalDoc)
    */
-  async _getProposalsForExercise({ exercise }: { exercise: Exercise }): Promise<ProposalDoc[]> {
+  async _getProposalsForExercise(
+    { exercise }: { exercise: Exercise },
+  ): Promise<ProposalDoc[]> {
     return this.detailProposals.find({ exercise }).toArray();
   }
-
 }
-
-
-
