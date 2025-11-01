@@ -1,4 +1,43 @@
-Interesting moments:
+# Whats New
+- ExerciseLibrary
+  - Admin-gated mutations (actorIsAdmin required for add/update/deprecate/propose/apply/discard).
+  - AI augmentation restored: proposeDetails always calls Gemini using server key; removed user overrides.
+  - Switched to Google’s official @google/generative-ai SDK; added testable LLM client stub.
+  - Proposal response now returns details to the UI immediately; exercise remains unchanged until apply.
+  - Removed recommendedFreq from the library (frequency now belongs in RehabPlan plan items).
+  - Safer applyDetails: null videoUrl clears the field; robust JSON/code-fence parsing and validation.
+
+- UserAccount
+  - register supports isAdmin (default false); login/logout/_isSignedIn implemented.
+  - Share Links made useful: added queries
+    - _listShareLinks (owner) → [{ shareLink, token, expiry, expired }]
+    - _resolveShareLink (token) → [{ owner, ownerUsername, expiresAt, expired }]
+
+- CheckIn
+  - Authorization added: submit/amend require actor = owner.
+  - Query _hasCheckIn(owner, date) added for reminder flows.
+
+- RehabPlan
+  - Owner authorization enforced on createPlan/addPlanItem/removePlanItem/archivePlan.
+  - Queries added: _getActivePlanByOwner and _getPlanById.
+
+- Feedback
+  - Added _listMessages(owner) to inspect reminders/motivations.
+  - New recordCompletion(owner, date, completedAll) action auto-updates streaks and 7‑day completion window.
+  - Summary state extended with lastCompletedDate and recentCompletedDates.
+
+- Server & Platform
+  - CORS enabled via Hono middleware for frontend integration.
+  - deno.json task now loads .env automatically (--env-file=.env) for GEMINI_API_KEY/GEMINI_MODEL.
+  - Dynamic endpoint loader excludes internal helper functions from public API.
+
+- API & Docs
+  - design/api/backend.api.md updated for all changes above, including ExerciseLibrary.proposeDetails shape and new UserAccount/Feedback endpoints.
+
+- Tests
+  - Comprehensive updates across concepts: admin gating, owner checks, LLM stubbed flows, proposal apply/discard, share-link listing/resolution, and feedback streak progression. All tests pass.
+
+# Interesting moments:
 
 
 ## Optional params
