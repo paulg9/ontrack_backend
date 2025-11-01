@@ -1,2 +1,40 @@
+# ExerciseLibrary — Changes from previous AI-augmented implementation/spec
+
+## What changed and why
+
+- Modularity and signatures
+  - Switched from a Node/TS in-memory class with multi-arg methods to a Deno + MongoDB concept class whose actions take a single dictionary argument and return a dictionary (or `{error}`), aligning with the assignment rules.
+  - Introduced underscore-prefixed queries that always return arrays to support testing and state inspection.
+
+- Persistence model
+  - Replaced in-memory `Map` state with MongoDB collections: `ExerciseLibrary.exercises` and `ExerciseLibrary.detailProposals`.
+  - Adopted branded `ID` (`_id`) for both Exercises and Proposals, generated via `freshID()`; removed the externally supplied `exerciseId` field.
+
+- AI proposal flow
+  - Original `proposeDetails(exerciseId, llm)` made a live Gemini call. For deterministic, low-cost tests, `proposeDetails(exercise, llmText)` now accepts an LLM output string (JSON) and parses/validates it. This preserves the review-and-apply workflow without network dependency.
+  - Kept the proposal records and explicit apply/discard actions. No exercise changes occur until `applyDetails`.
+
+- Validation and guardrails
+  - Maintained and clarified validators from the prior version: safe cues (no HTML, max length 400), URL normalization (http/https, length ≤ 2048), integer frequency in [0..14].
+  - Tightened return-shape consistency: normal errors return `{error: string}` rather than throw; only truly exceptional scenarios would throw (none expected here).
+
+- Spec alignment
+  - Expanded the spec to include `DetailProposals`, `proposeDetails`, `applyDetails`, and `discardDetails` to match the prior AI-augmented behavior.
+  - Updated action signatures to concept style (dictionary args/results) and added queries for testing: `_listExercises`, `_getExerciseById`, `_listProposals`, `_getProposalsForExercise`.
+
+## Notable divergences from the previous assignment
+
+- Role checks were removed from the implementation (previously used `Role = 'Administrator' | 'Athlete'`). Enforcing roles would couple concepts; instead, role enforcement belongs to a separate concept or the app layer. The spec still assumes admin-only mutation in the product design, but this concept remains self-contained.
+- IDs are system-generated. Previously, `exerciseId` was provided by the caller; now `_id` is generated. If human-friendly slugs are needed later, they can be an additional field, not the primary key.
+- Live LLM calls were replaced with a pure input string (`llmText`) to ensure tests are reproducible and offline.
+
+## Residual risks and future work
+
+- Proposal JSON format: the concept validates and rejects unexpected shapes, but upstream prompt engineering (in a future LLM wrapper concept) should ensure the JSON schema contract.
+- Soft deletion: deprecation hides exercises from new selections; queries expose an `includeDeprecated` flag to support both views. If hard deletion or versioning is needed, add an explicit archival action.
+
+## Testing notes
+
+- Added a principle test (populate, update, deprecate, browse) and variants (proposal apply/discard, validation edge cases, update semantics, non-existent resource errors) using `testDb()` with the Deno test framework.
 
 

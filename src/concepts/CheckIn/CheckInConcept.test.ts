@@ -2,7 +2,7 @@
 import { assertEquals, assertExists, assertObjectMatch, assertArrayIncludes } from "jsr:@std/assert";
 import { testDb, freshID } from "@utils/database.ts";
 import { ID } from "@utils/types.ts";
-import CheckInConcept from "./CheckIn.ts"; // Import the actual concept implementation
+import CheckInConcept from "./CheckInConcept.ts"; // Import the actual concept implementation
 
 Deno.test; // keep Deno import usage
 
@@ -37,8 +37,9 @@ Deno.test("CheckIn Concept Testing", async (t) => {
     const comment1 = "Felt great after workout, mild knee pain.";
 
     console.log(`  Action: submit for ${userAlice} on ${today}`);
-    console.log(`    Input: { owner: ${userAlice}, date: "${today}", completedItems: [${completedItems1.join(', ')}], strain_0_10: ${strain1}, pain_0_10: ${pain1}, comment: "${comment1}" }`);
+    console.log(`    Input: { actor: ${userAlice}, owner: ${userAlice}, date: "${today}", completedItems: [${completedItems1.join(', ')}], strain_0_10: ${strain1}, pain_0_10: ${pain1}, comment: "${comment1}" }`);
     const submitResult = await checkInService.submit({
+      actor: userAlice,
       owner: userAlice,
       date: today,
       completedItems: completedItems1,
@@ -49,6 +50,12 @@ Deno.test("CheckIn Concept Testing", async (t) => {
     assertExists((submitResult as any).checkin);
     const checkinId = unwrapCheckinResult(submitResult);
     console.log(`    Result: Check-in created successfully with ID: ${checkinId}`);
+
+    // Query convenience: _hasCheckIn
+    const hasToday = await checkInService._hasCheckIn({ owner: userAlice, date: today });
+    assertObjectMatch(hasToday[0], { has: true });
+    const hasOther = await checkInService._hasCheckIn({ owner: userAlice, date: "2023-10-28" });
+    assertObjectMatch(hasOther[0], { has: false });
 
     // Verify effects of submit
     const createdCheckIn = (await checkInService._getCheckInById({ checkin: checkinId }))[0];
@@ -71,6 +78,7 @@ Deno.test("CheckIn Concept Testing", async (t) => {
     console.log(`\n  Action: amend check-in ${checkinId}`);
     console.log(`    Input: { completedItems: [${updatedCompletedItems.join(', ')}], strain_0_10: ${updatedStrain}, comment: "${updatedComment}" }`);
     const amendResult = await checkInService.amend({
+      actor: userAlice,
       checkin: checkinId,
       completedItems: updatedCompletedItems,
       strain_0_10: updatedStrain,
@@ -108,6 +116,7 @@ Deno.test("CheckIn Concept Testing", async (t) => {
     await t_submit_success.step("Should create a check-in with minimal fields", async () => {
       console.log("\n--- submit Action: Successful minimal submission ---");
       const result = await checkInService.submit({
+        actor: user,
         owner: user,
         date: dateMinimal,
         completedItems: [],
@@ -133,6 +142,7 @@ Deno.test("CheckIn Concept Testing", async (t) => {
       console.log("\n--- submit Action: Successful full submission ---");
       const comment = "Feeling strong!";
       const result = await checkInService.submit({
+        actor: user,
         owner: user,
         date: dateFull,
         completedItems: [planItemB, planItemC],
@@ -160,6 +170,7 @@ Deno.test("CheckIn Concept Testing", async (t) => {
       const expectedItems = [planItemA, planItemB]; // Expected unique items
 
       const result = await checkInService.submit({
+        actor: user,
         owner: user,
         date: dateDuplicates,
         completedItems: itemsWithDuplicates,
@@ -177,13 +188,13 @@ Deno.test("CheckIn Concept Testing", async (t) => {
 
     await t_submit_success.step("Should allow boundary values (0 and 10) for strain/pain", async () => {
       console.log("\n--- submit Action: Boundary values for strain/pain ---");
-      const r1 = await checkInService.submit({ owner: user, date: dateBoundary1, completedItems: [], strain_0_10: 0, pain_0_10: 10 });
+      const r1 = await checkInService.submit({ actor: user, owner: user, date: dateBoundary1, completedItems: [], strain_0_10: 0, pain_0_10: 10 });
       const r1Id = unwrapCheckinResult(r1);
       const c1 = (await checkInService._getCheckInById({ checkin: r1Id }))[0];
       assertExists(c1);
       assertObjectMatch(c1, { owner: user, date: dateBoundary1, strain_0_10: 0, pain_0_10: 10 });
 
-      const r2 = await checkInService.submit({ owner: user, date: dateBoundary2, completedItems: [], strain_0_10: 10, pain_0_10: 0 });
+      const r2 = await checkInService.submit({ actor: user, owner: user, date: dateBoundary2, completedItems: [], strain_0_10: 10, pain_0_10: 0 });
       const r2Id = unwrapCheckinResult(r2);
       const c2 = (await checkInService._getCheckInById({ checkin: r2Id }))[0];
       assertExists(c2);
@@ -203,12 +214,12 @@ Deno.test("CheckIn Concept Testing", async (t) => {
       console.log("\n--- submit Action: Requires no check-in exists for (owner, date) (failure) ---");
       const existingDate = uniqueDateForTest(0);
       // First, successfully submit one
-      const firstSubmit = await checkInService.submit({ owner: user, date: existingDate, completedItems: [], strain_0_10: strain, pain_0_10: pain });
+      const firstSubmit = await checkInService.submit({ actor: user, owner: user, date: existingDate, completedItems: [], strain_0_10: strain, pain_0_10: pain });
       unwrapCheckinResult(firstSubmit);
       console.log(`  Pre-condition: A check-in was successfully submitted for ${user} on ${existingDate}.`);
 
       // Then, attempt to submit another for the same user and date
-      const result = await checkInService.submit({ owner: user, date: existingDate, completedItems, strain_0_10: strain, pain_0_10: pain });
+      const result = await checkInService.submit({ actor: user, owner: user, date: existingDate, completedItems, strain_0_10: strain, pain_0_10: pain });
       if (!('error' in result)) throw new Error('Expected error on duplicate submit');
       assertObjectMatch(result, { error: `A check-in for owner ${user} on date ${existingDate} already exists.` });
       console.log(`  Requirement: 'no check-in exists for (owner, date)' failed as expected: ${result.error}`);
@@ -217,7 +228,7 @@ Deno.test("CheckIn Concept Testing", async (t) => {
     await t_submit_requires.step("Should reject if strain_0_10 is out of range (<0)", async () => {
       console.log("\n--- submit Action: Requires strain_0_10 within 0-10 (failure: too low) ---");
       const date = uniqueDateForTest(1);
-      const result = await checkInService.submit({ owner: user, date, completedItems, strain_0_10: -1, pain_0_10: pain });
+      const result = await checkInService.submit({ actor: user, owner: user, date, completedItems, strain_0_10: -1, pain_0_10: pain });
       if (!('error' in result)) throw new Error('Expected error for invalid strain');
       assertObjectMatch(result, { error: `Strain must be between 0 and 10.` });
       console.log(`  Requirement: Strain range validation failed as expected: ${result.error}`);
@@ -226,7 +237,7 @@ Deno.test("CheckIn Concept Testing", async (t) => {
     await t_submit_requires.step("Should reject if pain_0_10 is out of range (>10)", async () => {
       console.log("\n--- submit Action: Requires pain_0_10 within 0-10 (failure: too high) ---");
       const date = uniqueDateForTest(2);
-      const result = await checkInService.submit({ owner: user, date, completedItems, strain_0_10: strain, pain_0_10: 11 });
+      const result = await checkInService.submit({ actor: user, owner: user, date, completedItems, strain_0_10: strain, pain_0_10: 11 });
       if (!('error' in result)) throw new Error('Expected error for invalid pain');
       assertObjectMatch(result, { error: `Pain must be between 0 and 10.` });
       console.log(`  Requirement: Pain range validation failed as expected: ${result.error}`);
@@ -235,7 +246,7 @@ Deno.test("CheckIn Concept Testing", async (t) => {
     await t_submit_requires.step("Should reject if date format is invalid", async () => {
       console.log("\n--- submit Action: Requires date format YYYY-MM-DD (failure) ---");
       const invalidDate = "2023/11/06";
-      const result = await checkInService.submit({ owner: user, date: invalidDate, completedItems, strain_0_10: strain, pain_0_10: pain });
+      const result = await checkInService.submit({ actor: user, owner: user, date: invalidDate, completedItems, strain_0_10: strain, pain_0_10: pain });
       if (!('error' in result)) throw new Error('Expected error for invalid date');
       assertObjectMatch(result, { error: "Invalid date format. Expected YYYY-MM-DD." });
       console.log(`  Requirement: Date format validation failed as expected: ${result.error}`);
@@ -257,6 +268,7 @@ Deno.test("CheckIn Concept Testing", async (t) => {
 
     // Setup: create a check-in to amend
     const submitResult = await checkInService.submit({
+      actor: user,
       owner: user,
       date: date,
       completedItems: initialCompleted,
@@ -270,7 +282,7 @@ Deno.test("CheckIn Concept Testing", async (t) => {
     await t_amend_success.step("Should amend a single field (comment)", async () => {
       console.log("\n--- amend Action: Successful single field amendment (comment) ---");
       const newComment = "Revised thought, feeling better.";
-      const result = await checkInService.amend({ checkin: checkinId, comment: newComment });
+      const result = await checkInService.amend({ actor: user, checkin: checkinId, comment: newComment });
       assertEquals(result, {}, `Expected amend to succeed: ${result.error}`);
 
       const amendedCheckIn = (await checkInService._getCheckInById({ checkin: checkinId }))[0];
@@ -281,7 +293,7 @@ Deno.test("CheckIn Concept Testing", async (t) => {
     await t_amend_success.step("Should amend a single field (strain_0_10)", async () => {
       console.log("\n--- amend Action: Successful single field amendment (strain) ---");
       const newStrain = 8;
-      const result = await checkInService.amend({ checkin: checkinId, strain_0_10: newStrain });
+      const result = await checkInService.amend({ actor: user, checkin: checkinId, strain_0_10: newStrain });
       assertEquals(result, {}, `Expected amend to succeed: ${result.error}`);
 
       const amendedCheckIn = (await checkInService._getCheckInById({ checkin: checkinId }))[0];
@@ -292,7 +304,7 @@ Deno.test("CheckIn Concept Testing", async (t) => {
     await t_amend_success.step("Should amend a single field (pain_0_10)", async () => {
       console.log("\n--- amend Action: Successful single field amendment (pain) ---");
       const newPain = 0;
-      const result = await checkInService.amend({ checkin: checkinId, pain_0_10: newPain });
+      const result = await checkInService.amend({ actor: user, checkin: checkinId, pain_0_10: newPain });
       assertEquals(result, {}, `Expected amend to succeed: ${result.error}`);
 
       const amendedCheckIn = (await checkInService._getCheckInById({ checkin: checkinId }))[0];
@@ -303,7 +315,7 @@ Deno.test("CheckIn Concept Testing", async (t) => {
     await t_amend_success.step("Should amend completed items (add and remove)", async () => {
       console.log("\n--- amend Action: Successful amendment of completed items ---");
       const newCompleted = [planItemB, planItemC]; // Adding C, removing A (from initial list), keeping B
-      const result = await checkInService.amend({ checkin: checkinId, completedItems: newCompleted });
+      const result = await checkInService.amend({ actor: user, checkin: checkinId, completedItems: newCompleted });
       assertEquals(result, {}, `Expected amend to succeed: ${result.error}`);
 
       const amendedCheckIn = (await checkInService._getCheckInById({ checkin: checkinId }))[0];
@@ -314,7 +326,7 @@ Deno.test("CheckIn Concept Testing", async (t) => {
 
     await t_amend_success.step("Should deduplicate completed items on amend", async () => {
       console.log("\n--- amend Action: Deduplicate completed items ---");
-      const result = await checkInService.amend({ checkin: checkinId, completedItems: [planItemA, planItemB, planItemA] });
+      const result = await checkInService.amend({ actor: user, checkin: checkinId, completedItems: [planItemA, planItemB, planItemA] });
       assertEquals(result, {}, `Expected amend to succeed: ${result.error}`);
       const amended = (await checkInService._getCheckInById({ checkin: checkinId }))[0];
       assertEquals(amended.completedItems.length, 2, "Expected completed items to be de-duplicated to length 2.");
@@ -329,6 +341,7 @@ Deno.test("CheckIn Concept Testing", async (t) => {
       const finalPain = 3;
       const finalComment = "Final check. Back to basics.";
       const result = await checkInService.amend({
+        actor: user,
         checkin: checkinId,
         completedItems: finalCompleted,
         strain_0_10: finalStrain,
@@ -349,7 +362,7 @@ Deno.test("CheckIn Concept Testing", async (t) => {
 
     await t_amend_success.step("Should allow clearing an optional field (comment to empty string)", async () => {
       console.log("\n--- amend Action: Clear optional field (comment) ---");
-      const result = await checkInService.amend({ checkin: checkinId, comment: "" });
+      const result = await checkInService.amend({ actor: user, checkin: checkinId, comment: "" });
       assertEquals(result, {}, `Expected amend to succeed: ${result.error}`);
 
       const amendedCheckIn = (await checkInService._getCheckInById({ checkin: checkinId }))[0];
@@ -359,7 +372,7 @@ Deno.test("CheckIn Concept Testing", async (t) => {
 
     await t_amend_success.step("Should allow clearing completed items to empty array", async () => {
       console.log("\n--- amend Action: Clear completed items to empty array ---");
-      const result = await checkInService.amend({ checkin: checkinId, completedItems: [] });
+      const result = await checkInService.amend({ actor: user, checkin: checkinId, completedItems: [] });
       assertEquals(result, {}, `Expected amend to succeed: ${result.error}`);
       const amendedCheckIn = (await checkInService._getCheckInById({ checkin: checkinId }))[0];
       assertEquals(amendedCheckIn.completedItems, []);
@@ -369,7 +382,7 @@ Deno.test("CheckIn Concept Testing", async (t) => {
     await t_amend_success.step("Should be a no-op if no fields are provided", async () => {
       console.log("\n--- amend Action: No-op amendment ---");
       const currentCheckIn = (await checkInService._getCheckInById({ checkin: checkinId }))[0];
-      const result = await checkInService.amend({ checkin: checkinId });
+      const result = await checkInService.amend({ actor: user, checkin: checkinId });
       assertEquals(result, {}, `Expected no-op amend to succeed: ${result.error}`);
 
       const afterNoOpCheckIn = (await checkInService._getCheckInById({ checkin: checkinId }))[0];
@@ -385,7 +398,7 @@ Deno.test("CheckIn Concept Testing", async (t) => {
     const nonExistentCheckinId = freshID() as ID;
 
     // Setup: create a check-in to amend for valid cases
-    const submitResult = await checkInService.submit({ owner: user, date: date, completedItems: [planItemA], strain_0_10: 5, pain_0_10: 1, comment: "Initial for amend fails" });
+    const submitResult = await checkInService.submit({ actor: user, owner: user, date: date, completedItems: [planItemA], strain_0_10: 5, pain_0_10: 1, comment: "Initial for amend fails" });
     const existingCheckin = (await checkInService._getCheckInByOwnerAndDate({ owner: user, date: date }))[0];
     assertExists(existingCheckin);
     const checkinId = unwrapCheckinResult(submitResult);
@@ -395,21 +408,21 @@ Deno.test("CheckIn Concept Testing", async (t) => {
 
     await t_amend_requires.step("Should reject if checkin does not exist", async () => {
       console.log("\n--- amend Action: Requires checkin exists (failure) ---");
-      const result = await checkInService.amend({ checkin: nonExistentCheckinId, strain_0_10: 6 });
+      const result = await checkInService.amend({ actor: user, checkin: nonExistentCheckinId, strain_0_10: 6 });
       assertEquals(result, { error: `Check-in with id ${nonExistentCheckinId} not found.` });
       console.log(`  Requirement: 'checkin exists' failed as expected: ${result.error}`);
     });
 
     await t_amend_requires.step("Should reject if amended strain_0_10 is out of range (<0)", async () => {
       console.log("\n--- amend Action: Requires strain_0_10 within 0-10 (failure: too low) ---");
-      const result = await checkInService.amend({ checkin: checkinId, strain_0_10: -1 });
+      const result = await checkInService.amend({ actor: user, checkin: checkinId, strain_0_10: -1 });
       assertEquals(result, { error: `Strain must be between 0 and 10.` });
       console.log(`  Requirement: Strain range validation failed as expected: ${result.error}`);
     });
 
     await t_amend_requires.step("Should reject if amended pain_0_10 is out of range (>10)", async () => {
       console.log("\n--- amend Action: Requires pain_0_10 within 0-10 (failure: too high) ---");
-      const result = await checkInService.amend({ checkin: checkinId, pain_0_10: 11 });
+      const result = await checkInService.amend({ actor: user, checkin: checkinId, pain_0_10: 11 });
       assertEquals(result, { error: `Pain must be between 0 and 10.` });
       console.log(`  Requirement: Pain range validation failed as expected: ${result.error}`);
     });

@@ -185,6 +185,11 @@ Deno.test("FeedbackConcept: Action `recordMessage` correctly creates messages", 
   assertEquals(message2?.text, summaryText);
   console.log("Effect confirmed: Summary message created successfully.");
 
+  // Query listMessages
+  const listed = await feedback._listMessages({ owner: ownerId });
+  assert(listed.length >= 2);
+  console.log("Effect confirmed: _listMessages returns recorded messages.");
+
   await client.close();
 });
 

@@ -1,4 +1,6 @@
-I didn't change anything about this concept, the feedback I recieved was good.
+Changed:
+- Added `actor` parameter to `submit` and `amend` and enforce ownership (`actor = owner` for submit; amend only by owner).
+- Added convenience query `_hasCheckIn(owner, date)` to support syncs (e.g., reminders) without coupling.
 
 # Interesting moments
 

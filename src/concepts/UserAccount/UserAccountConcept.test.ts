@@ -1,6 +1,6 @@
 import { testDb, freshID } from "@utils/database.ts";
 import { assertEquals, assertExists, assert, assertNotEquals } from "jsr:@std/assert";
-import UserAccountConcept from "./UserConcept.ts";
+import UserAccountConcept from "./UserAccountConcept.ts";
 import { ID } from "@utils/types.ts";
 
 // Helper to check if a result is an error object
@@ -28,6 +28,7 @@ Deno.test("Operational Principle: A user registers, manages settings, and shares
   assertEquals(userDoc.username, "athlete1");
   assertEquals(userDoc.reminderTime, null);
   assertEquals(userDoc.shareLinks, []);
+  assertEquals(userDoc.isAdmin, false);
   console.log("  ✅  Effect Confirmed: New user 'athlete1' created with default state.");
 
   // 2. Personalizes their notification reminder time
@@ -255,6 +256,118 @@ Deno.test("Interesting Scenario: Managing multiple share links", async () => {
   console.log("  ✅  Effect Confirmed: All share links have been revoked.");
 
   console.log("  🏁 Multiple Links Test Complete.");
+  await client.close();
+});
+
+Deno.test("Authentication: login and logout with session token", async () => {
+  console.log("\n🧪 Running Test: Authentication login/logout...");
+  const [db, client] = await testDb();
+  const concept = new UserAccountConcept(db);
+
+  // Register user
+  const reg = await concept.register({ username: "auth_user", password: "pw" });
+  assert(!isError(reg));
+
+  // Bad login
+  const badLogin = await concept.login({ username: "auth_user", password: "wrong" });
+  assert(isError(badLogin));
+  assertEquals((badLogin as { error: string }).error, "Invalid credentials");
+
+  // Good login
+  const login = await concept.login({ username: "auth_user", password: "pw" });
+  assert(!isError(login));
+  const token = (login as { token: string }).token;
+  assertExists(token);
+
+  // Query by token
+  const userRowsRes = await concept._getUserByToken({ token });
+  assert(!(userRowsRes as any).error);
+  const userRows = userRowsRes as Array<{ user: ID }>;
+  assertEquals(userRows.length, 1);
+  assertExists(userRows[0].user);
+
+  // Logout
+  const out = await concept.logout({ token });
+  assert(!isError(out));
+
+  // Token should no longer resolve
+  const afterRowsRes = await concept._getUserByToken({ token });
+  assert(!(afterRowsRes as any).error);
+  const afterRows = afterRowsRes as Array<{ user: ID }>;
+  assertEquals(afterRows.length, 0);
+
+  // Logout again should error
+  const out2 = await concept.logout({ token });
+  assert(isError(out2));
+  assertEquals((out2 as { error: string }).error, "Session not found");
+
+  await client.close();
+});
+
+Deno.test("Authentication: _isSignedIn convenience and expiry handling", async () => {
+  console.log("\n🧪 Running Test: _isSignedIn and expiry...");
+  const [db, client] = await testDb();
+  const concept = new UserAccountConcept(db);
+
+  // Register and login
+  const reg = await concept.register({ username: "is_user", password: "pw" });
+  assert(!isError(reg));
+  const login = await concept.login({ username: "is_user", password: "pw" });
+  assert(!isError(login));
+  const token = (login as { token: string }).token;
+
+  // isSignedIn should be true
+  const signedInRes = await concept._isSignedIn({ token });
+  const signedIn = (signedInRes as Array<{ signedIn: boolean }>)[0].signedIn;
+  assertEquals(signedIn, true);
+
+  // Expire the session manually then check
+  await concept.sessions.updateOne({ token }, { $set: { expiry: new Date(Date.now() - 1000) } });
+  const signedInAfterExpireRes = await concept._isSignedIn({ token });
+  const signedInAfterExpire = (signedInAfterExpireRes as Array<{ signedIn: boolean }>)[0].signedIn;
+  assertEquals(signedInAfterExpire, false);
+
+  // _getUserByToken should now return []
+  const byToken = await concept._getUserByToken({ token });
+  assert(!(byToken as any).error);
+  const rows = byToken as Array<{ user: ID }>;
+  assertEquals(rows.length, 0);
+
+  // Logout should now report not found (already expired & removed by logout)
+  const logoutRes = await concept.logout({ token });
+  // Depending on implementation, expired sessions may still be present; tolerate either
+  if ((logoutRes as any).error) {
+    assertEquals((logoutRes as { error: string }).error, "Session not found");
+  } else {
+    assertEquals(logoutRes, {});
+  }
+
+  await client.close();
+});
+
+Deno.test("Admin flag: register with isAdmin and _isAdmin", async () => {
+  console.log("\n🧪 Running Test: Admin flag...");
+  const [db, client] = await testDb();
+  const concept = new UserAccountConcept(db);
+
+  const reg = await concept.register({ username: "admin_candidate", password: "pw" });
+  assert(!isError(reg));
+  const { user } = reg as { user: ID };
+
+  // Initially false
+  const q1 = await concept._isAdmin({ user });
+  assert(!(q1 as any).error);
+  const isA1 = (q1 as Array<{ isAdmin: boolean }>)[0].isAdmin;
+  assertEquals(isA1, false);
+
+  // Register a separate admin user
+  const regAdmin = await concept.register({ username: "admin_user", password: "pw", isAdmin: true });
+  assert(!isError(regAdmin));
+  const { user: adminUser } = regAdmin as { user: ID };
+  const q2 = await concept._isAdmin({ user: adminUser });
+  const isA2 = (q2 as Array<{ isAdmin: boolean }>)[0].isAdmin;
+  assertEquals(isA2, true);
+
   await client.close();
 });
 

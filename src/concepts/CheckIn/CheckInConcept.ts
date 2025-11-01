@@ -49,6 +49,7 @@ export default class CheckInConcept {
    * @effects creates a new CheckIn with provided fields
    */
   async submit({
+    actor,
     owner,
     date,
     completedItems,
@@ -56,6 +57,7 @@ export default class CheckInConcept {
     pain_0_10,
     comment,
   }: {
+    actor: User;
     owner: User;
     date: string; // Expected format: YYYY-MM-DD
     completedItems: PlanItem[];
@@ -63,6 +65,10 @@ export default class CheckInConcept {
     pain_0_10: number;
     comment?: string;
   }): Promise<{ checkin: CheckIn } | { error: string }> {
+    // Requires: actor = owner
+    if (actor !== owner) {
+      return { error: "Only the owner can submit a check-in" };
+    }
     // Validate inputs
     if (strain_0_10 < 0 || strain_0_10 > 10) {
       return { error: "Strain must be between 0 and 10." };
@@ -108,12 +114,14 @@ export default class CheckInConcept {
    * @effects updates the provided fields on checkin
    */
   async amend({
+    actor,
     checkin,
     completedItems,
     strain_0_10,
     pain_0_10,
     comment,
   }: {
+    actor: User;
     checkin: CheckIn;
     completedItems?: PlanItem[];
     strain_0_10?: number;
@@ -124,6 +132,10 @@ export default class CheckInConcept {
     const existingCheckIn = await this.checkins.findOne({ _id: checkin });
     if (!existingCheckIn) {
       return { error: `Check-in with id ${checkin} not found.` };
+    }
+    // Requires: belongs to actor
+    if (existingCheckIn.owner !== actor) {
+      return { error: "Only the owner can amend this check-in" };
     }
 
     // Validate inputs if they are provided
@@ -191,6 +203,15 @@ export default class CheckInConcept {
   async _getCheckInById({ checkin }: { checkin: CheckIn }): Promise<CheckInDoc[]> {
     const doc = await this.checkins.findOne({ _id: checkin });
     return doc ? [doc] : [];
+  }
+
+  /**
+   * _hasCheckIn (owner: User, date: String): (has: Boolean)
+   * @effects returns [{has:true}] if a check-in exists for (owner, date), otherwise [{has:false}]
+   */
+  async _hasCheckIn({ owner, date }: { owner: User; date: string }): Promise<Array<{ has: boolean }>> {
+    const doc = await this.checkins.findOne({ owner, date });
+    return [{ has: !!doc }];
   }
 }
 

@@ -1,4 +1,7 @@
-changed: sets, reps, per week to be numbers, rather than a composite tpe
+changed:
+- Added `actor` authorization to all actions (`createPlan`, `addPlanItem`, `removePlanItem`, `archivePlan`) requiring plan owner.
+- Added queries `_getActivePlanByOwner` and `_getPlanById` to support UI/data access without breaking concept independence.
+- sets, reps, per week to be numbers, rather than a composite tpe
 
 
 interesting moment:

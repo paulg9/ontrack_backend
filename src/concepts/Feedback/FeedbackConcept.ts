@@ -333,5 +333,15 @@ export default class FeedbackConcept {
       return { error: `Database error during _hasSentReminderToday: ${e instanceof Error ? e.message : String(e)}` };
     }
   }
+
+  /**
+   * _listMessages (owner: User) : (message: MessageDocument)
+   * @effects returns all messages for owner sorted by timestamp desc
+   */
+  async _listMessages(
+    { owner }: { owner: User },
+  ): Promise<MessageDocument[]> {
+    return await this.messages.find({ owner }).sort({ timestamp: -1 }).toArray();
+  }
 }
 

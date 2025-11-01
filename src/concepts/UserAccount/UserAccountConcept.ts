@@ -9,6 +9,7 @@ const PREFIX = "UserAccount" + ".";
 // These are branded string types for better type safety and clarity, consistent with `ID`.
 type User = ID;
 type ShareLink = ID;
+type Session = ID;
 
 // Define specific types for data fields that aren't primitive strings/numbers.
 // TimeOfDay: Represented as a string, e.g., "14:30" for 2:30 PM.
@@ -26,6 +27,7 @@ interface UserDoc {
   passwordHash: string; // A hashed version of the user's password for security
   reminderTime: TimeOfDay | null; // The user's preferred reminder time, nullable if not set
   shareLinks: ShareLink[]; // An array of IDs of ShareLink entities owned by this user
+  isAdmin: boolean; // Admin flag (default false)
 }
 
 /**
@@ -37,6 +39,18 @@ interface ShareLinkDoc {
   token: string; // The actual token string that users will use for access
   expiry: DateTime; // The date and time when this share link expires
   owner: User; // The ID of the user who created this share link
+}
+
+/**
+ * Interface representing a Session document.
+ * Corresponds to: a set of Sessions with user, token, createdAt, expiry.
+ */
+interface SessionDoc {
+  _id: Session;
+  user: User;
+  token: string;
+  createdAt: DateTime;
+  expiry: DateTime;
 }
 
 /**
@@ -52,6 +66,8 @@ export default class UserAccountConcept {
   users: Collection<UserDoc>;
   // MongoDB collection for storing ShareLink documents
   shareLinks: Collection<ShareLinkDoc>;
+  // MongoDB collection for storing Session documents
+  sessions: Collection<SessionDoc>;
 
   /**
    * Constructor for the UserAccountConcept.
@@ -61,6 +77,7 @@ export default class UserAccountConcept {
   constructor(private readonly db: Db) {
     this.users = this.db.collection(PREFIX + "users");
     this.shareLinks = this.db.collection(PREFIX + "shareLinks");
+    this.sessions = this.db.collection(PREFIX + "sessions");
     
     // Create unique index on username field to enforce uniqueness at database level
     this.users.createIndex({ username: 1 }, { unique: true }).catch(() => {
@@ -80,7 +97,7 @@ export default class UserAccountConcept {
    * @returns A Promise resolving to an object with the new user's ID on success, or an error message.
    */
   async register(
-    { username, password }: { username: string; password: string; },
+    { username, password, isAdmin }: { username: string; password: string; isAdmin?: boolean },
   ): Promise<{ user: User; } | { error: string; }> {
     // DANGER: Plaintext password. In a real app, use a strong hashing library like bcrypt.
     const passwordHash = password; // Placeholder for actual hash
@@ -92,6 +109,7 @@ export default class UserAccountConcept {
       passwordHash: passwordHash,
       reminderTime: null, // Default value
       shareLinks: [], // Initialize as empty set
+      isAdmin: !!isAdmin,
     };
 
     try {
@@ -220,6 +238,88 @@ export default class UserAccountConcept {
     );
 
     return {};
+  }
+
+  // setAdmin removed in favor of admin flag during register
+
+  /**
+   * `login (username: String, password: String) : (token: String)`
+   *
+   * requires a User exists with username and passwordHash matching the provided password
+   * effects creates a new Session with a randomly generated token; sets createdAt := now and expiry := now + 12h
+   */
+  async login(
+    { username, password }: { username: string; password: string },
+  ): Promise<{ token: string } | { error: string }> {
+    const user = await this.users.findOne({ username });
+    if (!user) return { error: "Invalid credentials" };
+    if (user.passwordHash !== password) return { error: "Invalid credentials" };
+
+    const token = crypto.randomUUID();
+    const now = new Date();
+    const expiry = new Date(now.getTime() + 12 * 60 * 60 * 1000);
+    const sessionId = freshID() as Session;
+    const session: SessionDoc = {
+      _id: sessionId,
+      user: user._id,
+      token,
+      createdAt: now,
+      expiry,
+    };
+    await this.sessions.insertOne(session);
+    return { token };
+  }
+
+  /**
+   * `logout (token: String)`
+   *
+   * requires a Session exists with token
+   * effects deletes the Session
+   */
+  async logout(
+    { token }: { token: string },
+  ): Promise<Empty | { error: string }> {
+    const res = await this.sessions.findOneAndDelete({ token });
+    if (!res) return { error: "Session not found" };
+    return {};
+  }
+
+  /**
+   * `_getUserByToken (token: String) : (user: User)`
+   *
+   * effects returns the user associated with an active session token if it exists and not expired.
+   */
+  async _getUserByToken(
+    { token }: { token: string },
+  ): Promise<Array<{ user: User }> | { error: string }> {
+    const session = await this.sessions.findOne({ token });
+    if (!session) return [];
+    if (session.expiry && session.expiry.getTime() < Date.now()) return [];
+    return [{ user: session.user }];
+  }
+
+  /**
+   * `_isSignedIn (token: String) : (signedIn: Boolean)`
+   *
+   * effects returns [{ signedIn: true|false }] based on whether a non-expired session exists for token
+   */
+  async _isSignedIn(
+    { token }: { token: string },
+  ): Promise<Array<{ signedIn: boolean }> | { error: string }> {
+    const session = await this.sessions.findOne({ token });
+    const valid = !!session && (!session.expiry || session.expiry.getTime() >= Date.now());
+    return [{ signedIn: valid }];
+  }
+
+  /**
+   * `_isAdmin (user: User) : (isAdmin: Boolean)`
+   */
+  async _isAdmin(
+    { user }: { user: User },
+  ): Promise<Array<{ isAdmin: boolean }> | { error: string }> {
+    const u = await this.users.findOne({ _id: user });
+    if (!u) return { error: "User not found" };
+    return [{ isAdmin: !!u.isAdmin }];
   }
 }
 

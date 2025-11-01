@@ -89,7 +89,11 @@ export default class RehabPlanConcept {
    * @returns A Promise resolving to an object containing the new plan's ID,
    *          or an object with an 'error' string if the operation fails.
    */
-  async createPlan({ owner }: { owner: User }): Promise<{ plan: Plan } | { error: string }> {
+  async createPlan({ actor, owner }: { actor: User; owner: User }): Promise<{ plan: Plan } | { error: string }> {
+    // Requires: actor = owner
+    if (actor !== owner) {
+      return { error: "Only the owner can create their plan" };
+    }
     try {
       // Precondition 1: Check if the 'owner' already has an active (archived = false) plan.
       // As per concept independence, we assume the 'owner' ID is valid.
@@ -138,6 +142,7 @@ export default class RehabPlanConcept {
    *          or an object with an 'error' string if the operation fails.
    */
   async addPlanItem({
+    actor,
     plan,
     exercise,
     perWeek,
@@ -145,6 +150,7 @@ export default class RehabPlanConcept {
     reps,
     notes,
   }: {
+    actor: User;
     plan: Plan;
     exercise: Exercise;
     perWeek: number;
@@ -158,6 +164,9 @@ export default class RehabPlanConcept {
       if (!existingPlan) {
         console.warn(`[RehabPlanConcept] Plan ${plan} not found.`);
         return { error: `Plan ${plan} not found.` };
+      }
+      if (existingPlan.owner !== actor) {
+        return { error: "Only the plan owner can modify the plan" };
       }
 
       // Precondition 2: Verify 'exercise' exists and deprecated = false
@@ -220,13 +229,16 @@ export default class RehabPlanConcept {
    * @returns A Promise resolving to an Empty object on success,
    *          or an object with an 'error' string if the operation fails.
    */
-  async removePlanItem({ plan, exercise }: { plan: Plan; exercise: Exercise }): Promise<Empty | { error: string }> {
+  async removePlanItem({ actor, plan, exercise }: { actor: User; plan: Plan; exercise: Exercise }): Promise<Empty | { error: string }> {
     try {
       // Precondition 1: Verify the 'plan' exists.
       const existingPlan = await this.plans.findOne({ _id: plan });
       if (!existingPlan) {
         console.warn(`[RehabPlanConcept] Plan ${plan} not found for removal of item ${exercise}.`);
         return { error: `Plan ${plan} not found.` };
+      }
+      if (existingPlan.owner !== actor) {
+        return { error: "Only the plan owner can modify the plan" };
       }
 
       // Precondition 2: Verify that a PlanItem for the given 'exercise' exists within that plan's 'items' array.
@@ -273,13 +285,16 @@ export default class RehabPlanConcept {
    * @returns A Promise resolving to an Empty object on success,
    *          or an object with an 'error' string if the operation fails.
    */
-  async archivePlan({ plan }: { plan: Plan }): Promise<Empty | { error: string }> {
+  async archivePlan({ actor, plan }: { actor: User; plan: Plan }): Promise<Empty | { error: string }> {
     try {
       // Precondition 1: Verify the 'plan' exists.
       const existingPlan = await this.plans.findOne({ _id: plan });
       if (!existingPlan) {
         console.warn(`[RehabPlanConcept] Plan ${plan} not found for archiving.`);
         return { error: `Plan ${plan} not found.` };
+      }
+      if (existingPlan.owner !== actor) {
+        return { error: "Only the plan owner can modify the plan" };
       }
 
       // Effect: Update the 'archived' field of the document to 'true'.
@@ -305,5 +320,25 @@ export default class RehabPlanConcept {
       console.error(`[RehabPlanConcept] Error archiving plan ${plan}:`, e);
       return { error: `An unexpected error occurred: ${e instanceof Error ? e.message : String(e)}` };
     }
+  }
+
+  // QUERIES
+
+  /**
+   * _getActivePlanByOwner (owner: User): (plan: Plans)
+   * @effects returns the single active (non-archived) plan for owner with its items, if any
+   */
+  async _getActivePlanByOwner({ owner }: { owner: User }): Promise<Plans[]> {
+    const doc = await this.plans.findOne({ owner, archived: false });
+    return doc ? [doc] : [];
+  }
+
+  /**
+   * _getPlanById (plan: Plan): (plan: Plans)
+   * @effects returns the plan by id with its items, if it exists
+   */
+  async _getPlanById({ plan }: { plan: Plan }): Promise<Plans[]> {
+    const doc = await this.plans.findOne({ _id: plan });
+    return doc ? [doc] : [];
   }
 }

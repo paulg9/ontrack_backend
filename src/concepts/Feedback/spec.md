@@ -51,6 +51,9 @@
     **requires** in Feedback: Summary of owner exists
     **effects** returns `true` if the `owner`'s `lastReminderDate` in their Summary is `date`, `false` otherwise.
 
+*   _listMessages (owner: User) : (message: {timestamp: DateTime, kind: String, text: String})
+    **effects** returns messages for the owner, newest first
+
 **syncs**
 
 *   computeFeedback

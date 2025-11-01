@@ -59,8 +59,8 @@ Deno.test("RehabPlan Concept Testing", async (t) => {
 
     // Action 1: Create a plan for TEST_USER_1.
     // This tests the `createPlan` action's success path and initial effects.
-    console.log(`Action: createPlan({ owner: "${TEST_USER_1}" })`);
-    const createPlanResult = await rehabPlanConcept.createPlan({ owner: TEST_USER_1 });
+    console.log(`Action: createPlan({ actor: "${TEST_USER_1}", owner: "${TEST_USER_1}" })`);
+    const createPlanResult = await rehabPlanConcept.createPlan({ actor: TEST_USER_1, owner: TEST_USER_1 });
     console.log("Output:", JSON.stringify(createPlanResult)); // Log action output
     assertExists(createPlanResult, "createPlan should return a result.");
     if ("error" in createPlanResult) {
@@ -88,7 +88,7 @@ Deno.test("RehabPlan Concept Testing", async (t) => {
       notes: "Warm-up exercises for shoulders",
     };
     console.log(`Action: addPlanItem(${JSON.stringify(item1Details)})`);
-    const addResult1 = await rehabPlanConcept.addPlanItem(item1Details);
+    const addResult1 = await rehabPlanConcept.addPlanItem({ actor: TEST_USER_1, ...item1Details });
     console.log("Output:", JSON.stringify(addResult1));
     assertEquals(addResult1, {}, "addPlanItem for first item should succeed.");
     console.log(`Effect: Item "${TEST_EXERCISE_1}" added to plan "${user1PlanId}".`);
@@ -112,7 +112,7 @@ Deno.test("RehabPlan Concept Testing", async (t) => {
       notes: "Main lift for legs",
     };
     console.log(`Action: addPlanItem(${JSON.stringify(item2Details)})`);
-    const addResult2 = await rehabPlanConcept.addPlanItem(item2Details);
+    const addResult2 = await rehabPlanConcept.addPlanItem({ actor: TEST_USER_1, ...item2Details });
     console.log("Output:", JSON.stringify(addResult2));
     assertEquals(addResult2, {}, "addPlanItem for second item should succeed.");
     console.log(`Effect: Item "${TEST_EXERCISE_2}" added to plan "${user1PlanId}".`);
@@ -126,6 +126,17 @@ Deno.test("RehabPlan Concept Testing", async (t) => {
     console.log(`Verification: Plan "${user1PlanId}" now contains item for "${TEST_EXERCISE_2}".`);
 
     console.log("\n--- Principle Trace Completed ---");
+
+    // Query: active plan by owner
+    const active = await rehabPlanConcept._getActivePlanByOwner({ owner: TEST_USER_1 });
+    assertExists(active[0]);
+    assertEquals(active[0]._id, user1PlanId);
+    assertEquals(active[0].items.length, 2);
+
+    // Query: plan by id
+    const byId = await rehabPlanConcept._getPlanById({ plan: user1PlanId });
+    assertExists(byId[0]);
+    assertEquals(byId[0]._id, user1PlanId);
   });
 
   // Scenario 1: `createPlan` - Covering requirements and effects, including failure cases.
@@ -135,8 +146,8 @@ Deno.test("RehabPlan Concept Testing", async (t) => {
 
     // 1. Successful creation for a new user (TEST_USER_2)
     await st.step("1. Successful creation for a new user", async () => {
-      console.log(`Action: createPlan({ owner: "${TEST_USER_2}" })`);
-      const result = await rehabPlanConcept.createPlan({ owner: TEST_USER_2 });
+      console.log(`Action: createPlan({ actor: "${TEST_USER_2}", owner: "${TEST_USER_2}" })`);
+      const result = await rehabPlanConcept.createPlan({ actor: TEST_USER_2, owner: TEST_USER_2 });
       console.log("Output:", JSON.stringify(result));
       assertExists(result, "createPlan should return a result.");
       if ("error" in result) {
@@ -156,8 +167,8 @@ Deno.test("RehabPlan Concept Testing", async (t) => {
     // 2. Failure: Attempt to create a plan when the owner already has an active (non-archived) plan.
     // This tests the `requires` condition: "owner exists and has no active (non-archived) plan".
     await st.step("2. Failure: createPlan when owner already has an active plan", async () => {
-      console.log(`Action: createPlan({ owner: "${TEST_USER_2}" }) (attempting to create a second active plan for same user)`);
-      const result = await rehabPlanConcept.createPlan({ owner: TEST_USER_2 });
+      console.log(`Action: createPlan({ actor: "${TEST_USER_2}", owner: "${TEST_USER_2}" }) (attempting to create a second active plan for same user)`);
+      const result = await rehabPlanConcept.createPlan({ actor: TEST_USER_2, owner: TEST_USER_2 });
       console.log("Output:", JSON.stringify(result));
       assertExists(result, "createPlan should return a result.");
       if (!("error" in result)) {
@@ -182,7 +193,7 @@ Deno.test("RehabPlan Concept Testing", async (t) => {
 
     // Setup: Create a plan for `addPlanItem` tests.
     await st.step("Setup: Create a plan for testing addPlanItem", async () => {
-      const createResult = await rehabPlanConcept.createPlan({ owner: TEST_USER_3 });
+      const createResult = await rehabPlanConcept.createPlan({ actor: TEST_USER_3, owner: TEST_USER_3 });
       if ("error" in createResult) throw new Error(`Setup failed: ${createResult.error}`);
       planIdForAddItem = createResult.plan;
       console.log(`Setup: Created plan ${planIdForAddItem} for "${TEST_USER_3}".`);
@@ -196,7 +207,7 @@ Deno.test("RehabPlan Concept Testing", async (t) => {
         perWeek: 1, sets: 1, reps: 1, notes: "First item",
       };
       console.log(`Action: addPlanItem(${JSON.stringify(itemDetails)})`);
-      const result = await rehabPlanConcept.addPlanItem(itemDetails);
+      const result = await rehabPlanConcept.addPlanItem({ actor: TEST_USER_3, ...itemDetails });
       console.log("Output:", JSON.stringify(result));
       assertEquals(result, {}, "addPlanItem should succeed.");
       console.log(`Effect: Item "${TEST_EXERCISE_1}" added to plan "${planIdForAddItem}".`);
@@ -217,7 +228,7 @@ Deno.test("RehabPlan Concept Testing", async (t) => {
         perWeek: 5, sets: 5, reps: 5, notes: "No plan",
       };
       console.log(`Action: addPlanItem(${JSON.stringify(itemDetails)})`);
-      const result = await rehabPlanConcept.addPlanItem(itemDetails);
+      const result = await rehabPlanConcept.addPlanItem({ actor: TEST_USER_3, ...itemDetails });
       console.log("Output:", JSON.stringify(result));
       assertExists(result, "addPlanItem should return a result.");
       if (!("error" in result)) {
@@ -236,7 +247,7 @@ Deno.test("RehabPlan Concept Testing", async (t) => {
         perWeek: 1, sets: 1, reps: 1, notes: "Duplicate",
       };
       console.log(`Action: addPlanItem(${JSON.stringify(itemDetails)}) (attempting to add duplicate exercise)`);
-      const result = await rehabPlanConcept.addPlanItem(itemDetails);
+      const result = await rehabPlanConcept.addPlanItem({ actor: TEST_USER_3, ...itemDetails });
       console.log("Output:", JSON.stringify(result));
       assertExists(result, "addPlanItem should return a result.");
       if (!("error" in result)) {
@@ -259,7 +270,7 @@ Deno.test("RehabPlan Concept Testing", async (t) => {
         perWeek: 4, sets: 4, reps: 12, notes: "New unique item",
       };
       console.log(`Action: addPlanItem(${JSON.stringify(itemDetails)})`);
-      const result = await rehabPlanConcept.addPlanItem(itemDetails);
+      const result = await rehabPlanConcept.addPlanItem({ actor: TEST_USER_3, ...itemDetails });
       console.log("Output:", JSON.stringify(result));
       assertEquals(result, {}, "addPlanItem for unique exercise should succeed.");
 
@@ -278,11 +289,11 @@ Deno.test("RehabPlan Concept Testing", async (t) => {
 
     // Setup: Create a plan with multiple items for `removePlanItem` tests.
     await st.step("Setup: Create a plan with multiple items for testing removePlanItem", async () => {
-      const createResult = await rehabPlanConcept.createPlan({ owner: "removeItemUser" as User });
+      const createResult = await rehabPlanConcept.createPlan({ actor: "removeItemUser" as User, owner: "removeItemUser" as User });
       if ("error" in createResult) throw new Error(`Setup failed: ${createResult.error}`);
       planIdForRemoveItem = createResult.plan;
-      await rehabPlanConcept.addPlanItem({ plan: planIdForRemoveItem, exercise: TEST_EXERCISE_1, perWeek: 1, sets: 1, reps: 1, notes: "Item to remove" });
-      await rehabPlanConcept.addPlanItem({ plan: planIdForRemoveItem, exercise: TEST_EXERCISE_2, perWeek: 2, sets: 2, reps: 2, notes: "Item to keep" });
+      await rehabPlanConcept.addPlanItem({ actor: "removeItemUser" as User, plan: planIdForRemoveItem, exercise: TEST_EXERCISE_1, perWeek: 1, sets: 1, reps: 1, notes: "Item to remove" });
+      await rehabPlanConcept.addPlanItem({ actor: "removeItemUser" as User, plan: planIdForRemoveItem, exercise: TEST_EXERCISE_2, perWeek: 2, sets: 2, reps: 2, notes: "Item to keep" });
       console.log(`Setup: Created plan ${planIdForRemoveItem} with items ${TEST_EXERCISE_1} and ${TEST_EXERCISE_2}.`);
       const initialPlan = await getPlanState(rehabPlanConcept, planIdForRemoveItem);
       assertEquals(initialPlan?.items.length, 2, "Setup: Plan should have 2 items.");
@@ -292,7 +303,7 @@ Deno.test("RehabPlan Concept Testing", async (t) => {
     await st.step("1. Successful removal of an existing plan item (TEST_EXERCISE_1)", async () => {
       const removeDetails = { plan: planIdForRemoveItem, exercise: TEST_EXERCISE_1 };
       console.log(`Action: removePlanItem(${JSON.stringify(removeDetails)})`);
-      const result = await rehabPlanConcept.removePlanItem(removeDetails);
+      const result = await rehabPlanConcept.removePlanItem({ actor: "removeItemUser" as User, ...removeDetails });
       console.log("Output:", JSON.stringify(result));
       assertEquals(result, {}, "removePlanItem should succeed.");
       console.log(`Effect: Item "${TEST_EXERCISE_1}" removed from plan "${planIdForRemoveItem}".`);
@@ -309,7 +320,7 @@ Deno.test("RehabPlan Concept Testing", async (t) => {
     await st.step("2. Failure: removePlanItem from a non-existent plan", async () => {
       const removeDetails = { plan: TEST_PLAN_NON_EXISTENT, exercise: TEST_EXERCISE_1 };
       console.log(`Action: removePlanItem(${JSON.stringify(removeDetails)})`);
-      const result = await rehabPlanConcept.removePlanItem(removeDetails);
+      const result = await rehabPlanConcept.removePlanItem({ actor: "removeItemUser" as User, ...removeDetails });
       console.log("Output:", JSON.stringify(result));
       assertExists(result, "removePlanItem should return a result.");
       if (!("error" in result)) {
@@ -324,7 +335,7 @@ Deno.test("RehabPlan Concept Testing", async (t) => {
     await st.step("3. Failure: removePlanItem with a non-existent exercise in an existing plan", async () => {
       const removeDetails = { plan: planIdForRemoveItem, exercise: TEST_EXERCISE_NON_EXISTENT };
       console.log(`Action: removePlanItem(${JSON.stringify(removeDetails)})`);
-      const result = await rehabPlanConcept.removePlanItem(removeDetails);
+      const result = await rehabPlanConcept.removePlanItem({ actor: "removeItemUser" as User, ...removeDetails });
       console.log("Output:", JSON.stringify(result));
       assertExists(result, "removePlanItem should return a result.");
       if (!("error" in result)) {
@@ -348,7 +359,7 @@ Deno.test("RehabPlan Concept Testing", async (t) => {
 
     // Setup: Create a plan for `archivePlan` tests.
     await st.step("Setup: Create a plan for testing archivePlan", async () => {
-      const createResult = await rehabPlanConcept.createPlan({ owner: TEST_USER_4 });
+      const createResult = await rehabPlanConcept.createPlan({ actor: TEST_USER_4, owner: TEST_USER_4 });
       if ("error" in createResult) throw new Error(`Setup failed: ${createResult.error}`);
       planIdForArchive = createResult.plan;
       console.log(`Setup: Created plan ${planIdForArchive} for "${TEST_USER_4}".`);
@@ -360,7 +371,7 @@ Deno.test("RehabPlan Concept Testing", async (t) => {
     await st.step("1. Successful archiving of an active plan", async () => {
       const archiveDetails = { plan: planIdForArchive };
       console.log(`Action: archivePlan(${JSON.stringify(archiveDetails)})`);
-      const result = await rehabPlanConcept.archivePlan(archiveDetails);
+      const result = await rehabPlanConcept.archivePlan({ actor: TEST_USER_4, ...archiveDetails });
       console.log("Output:", JSON.stringify(result));
       assertEquals(result, {}, "archivePlan should succeed.");
       console.log(`Effect: Plan "${planIdForArchive}" archived.`);
@@ -377,7 +388,7 @@ Deno.test("RehabPlan Concept Testing", async (t) => {
     await st.step("2. Successful (idempotent) archiving of an already archived plan", async () => {
       const archiveDetails = { plan: planIdForArchive };
       console.log(`Action: archivePlan(${JSON.stringify(archiveDetails)}) (attempting to archive an already archived plan)`);
-      const result = await rehabPlanConcept.archivePlan(archiveDetails);
+      const result = await rehabPlanConcept.archivePlan({ actor: TEST_USER_4, ...archiveDetails });
       console.log("Output:", JSON.stringify(result));
       assertEquals(result, {}, "archivePlan should succeed even if already archived (idempotent).");
       console.log(`Effect: Plan "${planIdForArchive}" remains archived.`);
@@ -394,7 +405,7 @@ Deno.test("RehabPlan Concept Testing", async (t) => {
     await st.step("3. Failure: archivePlan for a non-existent plan", async () => {
       const archiveDetails = { plan: TEST_PLAN_NON_EXISTENT };
       console.log(`Action: archivePlan(${JSON.stringify(archiveDetails)})`);
-      const result = await rehabPlanConcept.archivePlan(archiveDetails);
+      const result = await rehabPlanConcept.archivePlan({ actor: TEST_USER_4, ...archiveDetails });
       console.log("Output:", JSON.stringify(result));
       assertExists(result, "archivePlan should return a result.");
       if (!("error" in result)) {
