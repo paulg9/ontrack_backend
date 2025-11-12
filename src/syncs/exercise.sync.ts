@@ -623,7 +623,7 @@ export const ExerciseLibraryListProposalsQuery: Sync = (
 ) => ({
   when: actions([
     Requesting.request,
-    { path: "/ExerciseLibrary/_listProposals", session, status },
+    { path: "/ExerciseLibrary/_listProposals", session },
     { request },
   ]),
   where: async (frames) => {
