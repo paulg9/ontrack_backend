@@ -415,6 +415,35 @@ export const ExerciseLibraryApplyDetailsRequest: Sync = (
   }]),
 });
 
+export const ExerciseLibraryApplyDetailsRequestById: Sync = (
+  { request, session, user: _user, isAdmin: _isAdmin, proposalId, proposal },
+) => ({
+  when: actions([
+    Requesting.request,
+    { path: "/ExerciseLibrary/applyDetails", session, proposalId },
+    { request },
+  ]),
+  where: async (frames) => {
+    const out = new Frames();
+    for (const frame of frames) {
+      const tok = frame[session] as unknown as string;
+      const userRes = await UserAccount._getUserByToken({ token: tok });
+      if (!Array.isArray(userRes) || userRes.length === 0) continue;
+      const adminRes = await UserAccount._isAdmin({ user: userRes[0].user });
+      if (Array.isArray(adminRes) && adminRes[0]?.isAdmin === true) {
+        const next = Object.assign({}, frame) as Record<symbol, unknown>;
+        next[proposal] = frame[proposalId] as unknown as symbol;
+        out.push(next as never);
+      }
+    }
+    return out;
+  },
+  then: actions([ExerciseLibrary.applyDetails, {
+    proposal,
+    actorIsAdmin: true,
+  }]),
+});
+
 export const ExerciseLibraryApplyDetailsSuccess: Sync = ({ request }) => ({
   when: actions(
     [Requesting.request, { path: "/ExerciseLibrary/applyDetails" }, {
@@ -454,6 +483,35 @@ export const ExerciseLibraryDiscardDetailsRequest: Sync = (
       const adminRes = await UserAccount._isAdmin({ user: userRes[0].user });
       if (Array.isArray(adminRes) && adminRes[0]?.isAdmin === true) {
         out.push(frame);
+      }
+    }
+    return out;
+  },
+  then: actions([ExerciseLibrary.discardDetails, {
+    proposal,
+    actorIsAdmin: true,
+  }]),
+});
+
+export const ExerciseLibraryDiscardDetailsRequestById: Sync = (
+  { request, session, user: _user, isAdmin: _isAdmin, proposalId, proposal },
+) => ({
+  when: actions([
+    Requesting.request,
+    { path: "/ExerciseLibrary/discardDetails", session, proposalId },
+    { request },
+  ]),
+  where: async (frames) => {
+    const out = new Frames();
+    for (const frame of frames) {
+      const tok = frame[session] as unknown as string;
+      const userRes = await UserAccount._getUserByToken({ token: tok });
+      if (!Array.isArray(userRes) || userRes.length === 0) continue;
+      const adminRes = await UserAccount._isAdmin({ user: userRes[0].user });
+      if (Array.isArray(adminRes) && adminRes[0]?.isAdmin === true) {
+        const next = Object.assign({}, frame) as Record<symbol, unknown>;
+        next[proposal] = frame[proposalId] as unknown as symbol;
+        out.push(next as never);
       }
     }
     return out;
