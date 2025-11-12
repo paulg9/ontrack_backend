@@ -25,12 +25,20 @@
  */
 
 export const inclusions: Record<string, string> = {
-  // Feel free to delete these example inclusions
-  "/api/LikertSurvey/_getSurveyQuestions": "this is a public query",
-  "/api/LikertSurvey/_getSurveyResponses": "responses are public",
-  "/api/LikertSurvey/_getRespondentAnswers": "answers are visible",
-  "/api/LikertSurvey/submitResponse": "allow anyone to submit response",
-  "/api/LikertSurvey/updateResponse": "allow anyone to update their response",
+  "/api/UserAccount/register": "registration must remain publicly reachable",
+  "/api/UserAccount/login": "login bootstraps sessions without prior auth",
+  "/api/UserAccount/_resolveShareLink":
+    "share links should be resolvable without authentication",
+  "/api/LikertSurvey/_getSurveyQuestions":
+    "survey questions are intentionally public",
+  "/api/LikertSurvey/_getSurveyResponses":
+    "survey aggregate responses are public",
+  "/api/LikertSurvey/_getRespondentAnswers":
+    "respondent review screen is public",
+  "/api/LikertSurvey/submitResponse":
+    "anonymous respondents can submit answers",
+  "/api/LikertSurvey/updateResponse":
+    "respondents may correct their own answers without auth",
 };
 
 /**
@@ -44,7 +52,45 @@ export const inclusions: Record<string, string> = {
  */
 
 export const exclusions: Array<string> = [
-  // Feel free to delete these example exclusions
+  "/api/CheckIn/submit",
+  "/api/CheckIn/amend",
+  "/api/CheckIn/_getCheckInByOwnerAndDate",
+  "/api/CheckIn/_getCheckInsByOwner",
+  "/api/CheckIn/_getCheckInById",
+  "/api/CheckIn/_hasCheckIn",
+  "/api/ExerciseLibrary/setLLMClientForTesting",
+  "/api/ExerciseLibrary/addExercise",
+  "/api/ExerciseLibrary/addExerciseDraft",
+  "/api/ExerciseLibrary/updateExercise",
+  "/api/ExerciseLibrary/deprecateExercise",
+  "/api/ExerciseLibrary/proposeDetails",
+  "/api/ExerciseLibrary/applyDetails",
+  "/api/ExerciseLibrary/discardDetails",
+  "/api/ExerciseLibrary/_getExerciseById",
+  "/api/ExerciseLibrary/_listExercises",
+  "/api/ExerciseLibrary/_listProposals",
+  "/api/ExerciseLibrary/_getProposalsForExercise",
+  "/api/Feedback/recompute",
+  "/api/Feedback/recordMessage",
+  "/api/Feedback/recordCompletion",
+  "/api/Feedback/sendReminder",
+  "/api/Feedback/_getSummaryMetrics",
+  "/api/Feedback/_hasSentReminderToday",
+  "/api/Feedback/_listMessages",
   "/api/LikertSurvey/createSurvey",
   "/api/LikertSurvey/addQuestion",
+  "/api/RehabPlan/createPlan",
+  "/api/RehabPlan/addPlanItem",
+  "/api/RehabPlan/removePlanItem",
+  "/api/RehabPlan/archivePlan",
+  "/api/RehabPlan/_getActivePlanByOwner",
+  "/api/RehabPlan/_getPlanById",
+  "/api/UserAccount/logout",
+  "/api/UserAccount/setReminderTime",
+  "/api/UserAccount/createShareLink",
+  "/api/UserAccount/revokeShareLink",
+  "/api/UserAccount/_getUserByToken",
+  "/api/UserAccount/_isSignedIn",
+  "/api/UserAccount/_isAdmin",
+  "/api/UserAccount/_listShareLinks",
 ];

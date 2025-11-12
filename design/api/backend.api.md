@@ -1,983 +1,220 @@
+
 # API Specification: Backend Concepts
 
-Base URL: http://localhost:8000/api
+Base URL: `https://<backend>/api`
 
-All endpoints use HTTP POST with `Content-Type: application/json`.
+All endpoints accept `POST` requests with `Content-Type: application/json`.
 
-- Actions return a single JSON object (or `{}` when no results).
-- Queries (methods beginning with `_`) return a JSON array of objects.
-- Errors are returned as `{ "error": "string" }`.
+### Authentication Model
+- `session` &mdash; most routes require an authenticated user session. Include the token returned by `/UserAccount/login` in the request body.
+- `shareToken` &mdash; read-only routes that can be accessed without a session. Obtain the token from `/UserAccount/createShareLink`.
+- Routes listed under **Public** do not require authentication.
+
+### Response Shapes
+- Successful **actions** return a JSON object with the fields listed below.
+- Successful **queries** return `{ "results": [ ... ] }`.
+- Errors return `{ "error": "reason" }`.
+
+| Error Code | Meaning |
+| --- | --- |
+| `unauthenticated` | Missing or invalid `session`. |
+| `forbidden` | Session is valid but lacks required permissions (e.g., not an admin). |
+| `invalid_date` | Provided date/time failed validation. |
+| `invalid_share_token` | Share token not found. |
+| `share_link_expired` | Share token exists but has expired. |
 
 ---
 
-## Concept: ExerciseLibrary
-
-Purpose: Provide a catalog of exercises that a plan is allowed to reference.
-Administrators may request AI‑proposed details and explicitly apply or discard
-those proposals.
-
-### POST /api/ExerciseLibrary/addExercise
-
-Description: Create a fully-specified exercise. Requirements:
-
-- `actorIsAdmin = true`; `title` non-empty Effects:
-- Creates Exercise (`deprecated := false`) and returns its id Request Body:
-
-```json
-{
-  "title": "string",
-  "videoUrl": "string (optional)",
-  "cues": "string",
-  "actorIsAdmin": true
-}
-```
-
-Success Response Body:
-
-```json
-{ "exercise": "ID" }
-```
-
-### POST /api/ExerciseLibrary/addExerciseDraft
-
-Description: Create a minimally specified exercise draft. Requirements:
-
-- `actorIsAdmin = true`; `title` non-empty Effects:
-- Creates Exercise with minimal defaults Request Body:
-
-```json
-{ "title": "string", "actorIsAdmin": true }
-```
-
-Success Response Body:
-
-```json
-{ "exercise": "ID" }
-```
-
-### POST /api/ExerciseLibrary/updateExercise
-
-Description: Update optional exercise fields. Requirements:
-
-- `actorIsAdmin = true`; `exercise` exists; if provided: `title` non-empty;
-  `videoUrl` http/https or `null` to clear Effects:
-- Updates provided fields Request Body:
-
-```json
-{
-  "exercise": "ID",
-  "title": "string (optional)",
-  "videoUrl": "string|null (optional)",
-  "cues": "string (optional)",
-  "actorIsAdmin": true
-}
-```
-
-Success Response Body:
-
-```json
-{}
-```
-
-### POST /api/ExerciseLibrary/deprecateExercise
-
-Description: Mark an exercise as deprecated. Requirements:
-
-- `actorIsAdmin = true`; `exercise` exists Effects:
-- Sets `deprecated := true` Request Body:
-
-```json
-{ "exercise": "ID", "actorIsAdmin": true }
-```
-
-Success Response Body:
-
-```json
-{}
-```
-
-### POST /api/ExerciseLibrary/proposeDetails
-
-Description: Generate (via Gemini) or record AI-proposed details for an
-exercise. Requirements:
-
-- `actorIsAdmin = true`; `exercise` exists; the server must have
-  `GEMINI_API_KEY` configured; cues non-empty/no HTML/≤400; url http/https;
-  confidence in [0,1] Effects:
-- The server calls Gemini with the current exercise details, stores the proposed
-  details as a pending `DetailProposal`, and returns its id along with the
-  normalized details. Request Body:
-
-```json
-{
-  "exercise": "ID",
-  "actorIsAdmin": true
-}
-```
-
-Success Response Body:
-
-```json
-{
-  "proposal": "ID",
-  "details": {
-    "videoUrl": "string|null",
-    "cues": "string",
-    "confidence_0_1": 0
-  }
-}
-```
-
-### POST /api/ExerciseLibrary/applyDetails
-
-Description: Apply a pending proposal to its exercise. Requirements:
-
-- `actorIsAdmin = true`; pending `proposal` exists Effects:
-- Merges details; marks proposal applied Request Body:
-
-```json
-{ "proposal": "ID", "actorIsAdmin": true }
-```
-
-Success Response Body:
-
-```json
-{}
-```
-
-### POST /api/ExerciseLibrary/discardDetails
-
-Description: Discard a pending proposal. Requirements:
-
-- `actorIsAdmin = true`; pending `proposal` exists Effects:
-- Marks proposal discarded Request Body:
-
-```json
-{ "proposal": "ID", "actorIsAdmin": true }
-```
-
-Success Response Body:
-
-```json
-{}
-```
-
-### POST /api/ExerciseLibrary/_getExerciseById
-
-Description: Retrieve a single exercise by id. Request Body:
-
-```json
-{ "exercise": "ID" }
-```
-
-Success Response Body (Query):
-
-```json
-[
-  {
-    "_id": "ID",
-    "title": "string",
-    "videoUrl": "string (optional)",
-    "cues": "string",
-    "deprecated": false
-  }
-]
-```
-
-### POST /api/ExerciseLibrary/_listExercises
-
-Description: List exercises, optionally excluding deprecated. Request Body:
-
-```json
-{ "includeDeprecated": true }
-```
-
-Success Response Body (Query):
-
-```json
-[
-  {
-    "_id": "ID",
-    "title": "string",
-    "videoUrl": "string (optional)",
-    "cues": "string",
-    "deprecated": false
-  }
-]
-```
-
-### POST /api/ExerciseLibrary/_listProposals
-
-Description: List proposals, optionally filtered by status. Request Body:
-
-```json
-{ "status": "pending|applied|discarded" }
-```
-
-Success Response Body (Query):
-
-```json
-[
-  {
-    "_id": "ID",
-    "exercise": "ID",
-    "createdAt": "ISO-8601 string",
-    "videoUrl": "string (optional)",
-    "cues": "string",
-    "confidence_0_1": 0.8,
-    "status": "pending"
-  }
-]
-```
-
-### POST /api/ExerciseLibrary/_getProposalsForExercise
-
-Description: List proposals for a specific exercise. Request Body:
-
-```json
-{ "exercise": "ID" }
-```
-
-Success Response Body (Query):
-
-```json
-[
-  {
-    "_id": "ID",
-    "exercise": "ID",
-    "createdAt": "ISO-8601 string",
-    "videoUrl": "string (optional)",
-    "cues": "string",
-    "confidence_0_1": 0.8,
-    "status": "pending"
-  }
-]
-```
-
----
-
-## Concept: CheckIn
-
-Purpose: Record daily completion and simple subjective context.
-
-### POST /api/CheckIn/submit
-
-Description: Create a daily check-in. Requirements:
-
-- `actor = owner`; no existing check-in for (owner, date); strain and pain in
-  [0..10]; `date` format `YYYY-MM-DD` Effects:
-- Creates a CheckIn Request Body:
-
-```json
-{
-  "actor": "ID",
-  "owner": "ID",
-  "date": "YYYY-MM-DD",
-  "completedItems": ["ID"],
-  "strain_0_10": 0,
-  "pain_0_10": 0,
-  "comment": "string (optional)"
-}
-```
-
-Success Response Body:
-
-```json
-{ "checkin": "ID" }
-```
-
-### POST /api/CheckIn/amend
-
-Description: Update fields on an existing check-in. Requirements:
-
-- `checkin` exists and belongs to `actor` Effects:
-- Updates provided fields (comment cleared with null/empty string) Request Body:
-
-```json
-{
-  "actor": "ID",
-  "checkin": "ID",
-  "completedItems": ["ID"],
-  "strain_0_10": 0,
-  "pain_0_10": 0,
-  "comment": "string|null"
-}
-```
-
-Success Response Body:
-
-```json
-{}
-```
-
-### POST /api/CheckIn/_getCheckInByOwnerAndDate
-
-Description: Get check-in for (owner, date). Request Body:
-
-```json
-{ "owner": "ID", "date": "YYYY-MM-DD" }
-```
-
-Success Response Body (Query):
-
-```json
-[{
-  "_id": "ID",
-  "owner": "ID",
-  "date": "YYYY-MM-DD",
-  "completedItems": ["ID"],
-  "strain_0_10": 0,
-  "pain_0_10": 0,
-  "comment": "string (optional)"
-}]
-```
-
-### POST /api/CheckIn/_getCheckInsByOwner
-
-Description: List all check-ins for an owner. Request Body:
-
-```json
-{ "owner": "ID" }
-```
-
-Success Response Body (Query):
-
-```json
-[{
-  "_id": "ID",
-  "owner": "ID",
-  "date": "YYYY-MM-DD",
-  "completedItems": ["ID"],
-  "strain_0_10": 0,
-  "pain_0_10": 0,
-  "comment": "string (optional)"
-}]
-```
-
-### POST /api/CheckIn/_getCheckInById
-
-Description: Get a check-in by id. Request Body:
-
-```json
-{ "checkin": "ID" }
-```
-
-Success Response Body (Query):
-
-```json
-[{
-  "_id": "ID",
-  "owner": "ID",
-  "date": "YYYY-MM-DD",
-  "completedItems": ["ID"],
-  "strain_0_10": 0,
-  "pain_0_10": 0,
-  "comment": "string (optional)"
-}]
-```
-
-### POST /api/CheckIn/_hasCheckIn
-
-Description: Check existence of a check-in for (owner, date). Request Body:
-
-```json
-{ "owner": "ID", "date": "YYYY-MM-DD" }
-```
-
-Success Response Body (Query):
-
-```json
-[{ "has": true }]
-```
-
----
-
-## Concept: RehabPlan
-
-Purpose: Define the athlete’s routine as a selection of exercises and target
-frequencies.
-
-### POST /api/RehabPlan/createPlan
-
-Description: Create an empty plan for a user. Requirements:
-
-- `actor = owner`; owner has no active (non-archived) plan Effects:
-- Creates plan with empty items Request Body:
-
-```json
-{ "actor": "ID", "owner": "ID" }
-```
-
-Success Response Body:
-
-```json
-{ "plan": "ID" }
-```
-
-### POST /api/RehabPlan/addPlanItem
-
-Description: Add a plan item to a plan. Requirements:
-
-- `plan` exists; `plan.owner = actor`; `exercise` valid and not deprecated
-  (validated externally) Effects:
-- Appends the plan item Request Body:
-
-```json
-{
-  "actor": "ID",
-  "plan": "ID",
-  "exercise": "ID",
-  "perWeek": 0,
-  "sets": 0,
-  "reps": 0,
-  "notes": "string"
-}
-```
-
-Success Response Body:
-
-```json
-{}
-```
-
-### POST /api/RehabPlan/removePlanItem
-
-Description: Remove a plan item by exercise id. Requirements:
-
-- `plan` exists; `plan.owner = actor`; item for `exercise` exists Effects:
-- Removes the item Request Body:
-
-```json
-{ "actor": "ID", "plan": "ID", "exercise": "ID" }
-```
-
-Success Response Body:
-
-```json
-{}
-```
-
-### POST /api/RehabPlan/archivePlan
-
-Description: Archive a plan. Requirements:
-
-- `plan` exists; `plan.owner = actor` Effects:
-- Sets `archived := true` Request Body:
-
-```json
-{ "actor": "ID", "plan": "ID" }
-```
-
-### POST /api/RehabPlan/_getActivePlanByOwner
-
-Description: Get the active (non-archived) plan for an owner. Request Body:
-
-```json
-{ "owner": "ID" }
-```
-
-Success Response Body (Query):
-
-```json
-[
-  {
-    "_id": "ID",
-    "owner": "ID",
-    "archived": false,
-    "items": [
-      {
-        "exercise": "ID",
-        "perWeek": 0,
-        "sets": 0,
-        "reps": 0,
-        "notes": "string"
-      }
-    ]
-  }
-]
-```
-
-### POST /api/RehabPlan/_getPlanById
-
-Description: Get a plan by id. Request Body:
-
-```json
-{ "plan": "ID" }
-```
-
-Success Response Body (Query):
-
-```json
-[
-  {
-    "_id": "ID",
-    "owner": "ID",
-    "archived": false,
-    "items": [
-      {
-        "exercise": "ID",
-        "perWeek": 0,
-        "sets": 0,
-        "reps": 0,
-        "notes": "string"
-      }
-    ]
-  }
-]
-```
-
-Success Response Body:
-
-```json
-{}
-```
-
----
-
-## Concept: Feedback
-
-Purpose: Compute and deliver habit‑forming feedback and reminders from
-check‑ins.
-
-### POST /api/Feedback/recompute
-
-Description: Upsert summary metrics for a user. Requirements:
-
-- `owner` exists Effects:
-- Upserts Summary with provided streak and completion values; returns summaryId
-  Request Body:
-
-```json
-{
-  "owner": "ID",
-  "today": "ISO-8601 string",
-  "newStreakCount": 0,
-  "newCompletion7d": 0
-}
-```
-
-Success Response Body:
-
-```json
-{ "summaryId": "ID", "newStreakCount": 0, "newCompletion7d": 0 }
-```
-
-### POST /api/Feedback/recordCompletion
-
-Description: Update the summary when a day’s exercises are marked complete.
-Effects:
-
-- Creates a Summary if missing; updates streak and seven-day completion window
-
-Request Body:
-
-```json
-{
-  "owner": "ID",
-  "date": "ISO-8601 string",
-  "completedAll": true
-}
-```
-
-Success Response Body:
-
-```json
-{ "summaryId": "ID", "streakCount": 0, "completion7d": 0.0 }
-```
-
-### POST /api/Feedback/recordMessage
-
-Description: Record a message for a user. Requirements:
-
-- `owner` exists Effects:
-- Appends a Message and returns its id Request Body:
-
-```json
-{ "owner": "ID", "kind": "reminder|motivation|summary", "text": "string" }
-```
-
-Success Response Body:
-
-```json
-{ "messageId": "ID" }
-```
-
-### POST /api/Feedback/sendReminder
-
-Description: System action to send a reminder and record it. Requirements:
-
-- Summary for `owner` exists Effects:
-- Records reminder Message; updates `lastReminderDate` Request Body:
-
-```json
-{ "owner": "ID" }
-```
-
-Success Response Body:
-
-```json
-{}
-```
-
-### POST /api/Feedback/_getSummaryMetrics
-
-Description: Get streak and 7‑day completion ratio. Request Body:
-
-```json
-{ "owner": "ID" }
-```
-
-Success Response Body (Query):
-
-```json
-[{ "streakCount": 0, "completion7d": 0 }]
-```
-
-### POST /api/Feedback/_hasSentReminderToday
-
-Description: Check if a reminder was sent on a given date. Request Body:
-
-```json
-{ "owner": "ID", "date": "ISO-8601 string" }
-```
-
-Success Response Body (Query):
-
-```json
-[{ "sent": true }]
-```
-
-### POST /api/Feedback/_listMessages
-
-Description: List messages for an owner (newest first). Request Body:
-
-```json
-{ "owner": "ID" }
-```
-
-Success Response Body (Query):
-
-```json
-[
-  {
-    "_id": "ID",
-    "owner": "ID",
-    "timestamp": "ISO-8601 string",
-    "kind": "reminder|motivation|summary",
-    "text": "string"
-  }
-]
-```
-
----
-
-## Concept: LikertSurvey
-
-Purpose: Measure attitudes/opinions with Likert-scale questions.
-
-### POST /api/LikertSurvey/createSurvey
-
-Description: Create a new survey. Requirements:
-
-- `scaleMin < scaleMax` Effects:
-- Creates survey and returns its id Request Body:
-
-```json
-{ "author": "ID", "title": "string", "scaleMin": 1, "scaleMax": 5 }
-```
-
-Success Response Body:
-
-```json
-{ "survey": "ID" }
-```
-
-### POST /api/LikertSurvey/addQuestion
-
-Description: Add a question to a survey. Requirements:
-
-- Survey exists Effects:
-- Creates question and returns its id Request Body:
-
-```json
-{ "survey": "ID", "text": "string" }
-```
-
-Success Response Body:
-
-```json
-{ "question": "ID" }
-```
-
-### POST /api/LikertSurvey/submitResponse
-
-Description: Submit a response to a question. Requirements:
-
-- Question exists; respondent hasn’t answered; value within survey scale
-  Effects:
-- Records response Request Body:
-
-```json
-{ "respondent": "ID", "question": "ID", "value": 3 }
-```
-
-Success Response Body:
-
-```json
-{}
-```
-
-### POST /api/LikertSurvey/updateResponse
-
-Description: Update an existing response. Requirements:
-
-- Question exists; response exists; value within scale Effects:
-- Updates response value Request Body:
-
-```json
-{ "respondent": "ID", "question": "ID", "value": 4 }
-```
-
-Success Response Body:
-
-```json
-{}
-```
-
-### POST /api/LikertSurvey/_getSurveyQuestions
-
-Description: List questions for a survey. Request Body:
-
-```json
-{ "survey": "ID" }
-```
-
-Success Response Body (Query):
-
-```json
-[{ "_id": "ID", "survey": "ID", "text": "string" }]
-```
-
-### POST /api/LikertSurvey/_getSurveyResponses
-
-Description: List responses for a survey. Request Body:
-
-```json
-{ "survey": "ID" }
-```
-
-Success Response Body (Query):
-
-```json
-[{ "_id": "ID", "respondent": "ID", "question": "ID", "value": 3 }]
-```
-
-### POST /api/LikertSurvey/_getRespondentAnswers
-
-Description: List all answers by a respondent. Request Body:
-
-```json
-{ "respondent": "ID" }
-```
-
-Success Response Body (Query):
-
-```json
-[{ "_id": "ID", "respondent": "ID", "question": "ID", "value": 2 }]
-```
-
----
-
-## Concept: UserAccount
-
-Purpose: Create, manage, and personalize a user account; manage share links.
-
-### POST /api/UserAccount/register
-
-Description: Register a new user. Requirements:
-
-- `username` not already taken Effects:
-- Creates User; sets default fields Request Body:
-
+## UserAccount (Authentication & Share Links)
+
+### Public
+#### POST `/api/UserAccount/register`
+Request:
 ```json
 { "username": "string", "password": "string", "isAdmin": false }
 ```
-
-Success Response Body:
-
+Response:
 ```json
 { "user": "ID" }
 ```
 
-### POST /api/UserAccount/login
-
-Description: Sign in and receive a session token. Requirements:
-
-- A user with `username` exists and `password` matches Effects:
-- Creates a Session with token; returns token Request Body:
-
+#### POST `/api/UserAccount/login`
+Request:
 ```json
 { "username": "string", "password": "string" }
 ```
-
-Success Response Body:
-
+Response:
 ```json
 { "token": "string" }
 ```
 
-### POST /api/UserAccount/logout
-
-Description: Sign out by invalidating a session token. Requirements:
-
-- Session with `token` exists Effects:
-- Deletes the Session Request Body:
-
+#### POST `/api/UserAccount/_resolveShareLink`
+Request:
 ```json
 { "token": "string" }
 ```
-
-Success Response Body:
-
+Response:
 ```json
-{}
+{ "results": [ { "owner": "ID", "ownerUsername": "string|null", "expiresAt": "ISO-8601", "expired": false } ] }
 ```
 
-### POST /api/UserAccount/setReminderTime
+### Session Required
+Include `{ "session": "<token>", ... }`.
 
-Description: Set a user’s reminder time. Requirements:
-
-- User exists Effects:
-- Sets `reminderTime := time` Request Body:
-
+- **POST `/api/UserAccount/logout`**  
+  Request `{ "session": "string" }` → Response `{}`.
+- **POST `/api/UserAccount/setReminderTime`**  
+  Request `{ "session": "string", "time": "HH:MM" }` → Response `{}`.
+- **POST `/api/UserAccount/createShareLink`**  
+  Request `{ "session": "string", "ttlSeconds": 3600 }` → Response `{ "token": "string" }`.
+- **POST `/api/UserAccount/revokeShareLink`**  
+  Request `{ "session": "string", "token": "string" }` → Response `{}`.
+- **POST `/api/UserAccount/_getUserByToken`**  
+  Request `{ "session": "string" }` → Response `{ "results": [ { "user": "ID" } ] }`.
+- **POST `/api/UserAccount/_isSignedIn`**  
+  Request `{ "session": "string" }` → Response `{ "results": [ { "signedIn": true } ] }`.
+- **POST `/api/UserAccount/_isAdmin`**  
+  Request `{ "session": "string" }` → Response `{ "results": [ { "isAdmin": true } ] }`.
+- **POST `/api/UserAccount/_listShareLinks`**  
+  Request `{ "session": "string" }` → Response  
 ```json
-{ "user": "ID", "time": "HH:MM" }
-```
-
-Success Response Body:
-
-```json
-{}
-```
-
-### POST /api/UserAccount/_getUserByToken
-
-Description: Resolve a user id from an active session token. Request Body:
-
-```json
-{ "token": "string" }
-```
-
-Success Response Body (Query):
-
-```json
-[{ "user": "ID" }]
-```
-
-### POST /api/UserAccount/_isAdmin
-
-Description: Return whether a user is an administrator. Request Body:
-
-```json
-{ "user": "ID" }
-```
-
-Success Response Body (Query):
-
-```json
-[{ "isAdmin": true }]
-```
-
-### POST /api/UserAccount/_isSignedIn
-
-Description: Return whether a token corresponds to an active (non-expired)
-session. Request Body:
-
-```json
-{ "token": "string" }
-```
-
-Success Response Body (Query):
-
-```json
-[{ "signedIn": true }]
-```
-
-### POST /api/UserAccount/createShareLink
-
-Description: Create a share link for a user with TTL. Requirements:
-
-- Owner exists Effects:
-- Creates ShareLink; returns token Request Body:
-
-```json
-{ "owner": "ID", "ttlSeconds": 3600 }
-```
-
-Success Response Body:
-
-```json
-{ "token": "string" }
-```
-
-### POST /api/UserAccount/revokeShareLink
-
-Description: Revoke a share link by token for the owner. Requirements:
-
-- ShareLink with `token` exists and belongs to `owner` Effects:
-- Removes ShareLink and detaches from owner Request Body:
-
-```json
-{ "owner": "ID", "token": "string" }
-```
-
-Success Response Body:
-
-```json
-{}
-```
-
-### POST /api/UserAccount/_listShareLinks
-
-Description: List share links owned by a user (including expired ones). Request
-Body:
-
-```json
-{ "owner": "ID" }
-```
-
-Success Response Body (Query):
-
-```json
-[
   {
-    "shareLink": "ID",
-    "token": "string",
-    "expiry": "ISO-8601",
-    "expired": false
+    "results": [
+      { "shareLink": "ID", "token": "string", "expiry": "ISO-8601", "expired": false }
+    ]
   }
-]
-```
+  ```
 
-### POST /api/UserAccount/_resolveShareLink
+---
 
-Description: Resolve a share link token to its owner and expiry metadata.
+## ExerciseLibrary (Admin Session Required)
+All routes below require `{ "session": "<token>" }`. The backend verifies administrator status; the frontend no longer sends `actorIsAdmin`.
 
-Request Body:
-
+- **POST `/api/ExerciseLibrary/addExercise`**  
+  Request body also includes `title`, optional `videoUrl`, `cues`. → Response `{ "exercise": "ID" }`.
+- **POST `/api/ExerciseLibrary/addExerciseDraft`**  
+  Fields: `title`. → Response `{ "exercise": "ID" }`.
+- **POST `/api/ExerciseLibrary/updateExercise`**  
+  Fields: `exercise`, optional `title`, `videoUrl`, `cues`. → Response `{}`.
+- **POST `/api/ExerciseLibrary/deprecateExercise`**  
+  Fields: `exercise`. → Response `{}`.
+- **POST `/api/ExerciseLibrary/proposeDetails`**  
+  Fields: `exercise`. → Response  
 ```json
-{ "token": "string" }
-```
-
-Success Response Body (Query):
-
-```json
-[
   {
-    "owner": "ID",
-    "ownerUsername": "string|null",
-    "expiresAt": "ISO-8601",
-    "expired": false
+    "proposal": "ID",
+    "details": { "videoUrl": "string|null", "cues": "string", "confidence_0_1": 0.0 }
   }
-]
-```
+  ```
+- **POST `/api/ExerciseLibrary/applyDetails`** / **`discardDetails`**  
+  Fields: `proposal`. → Response `{}`.
+- **POST `/api/ExerciseLibrary/_getExerciseById`**  
+  Fields: `exercise`. → `{ "results": [ { "_id": "ID", "title": "...", "videoUrl": "...", "cues": "...", "deprecated": false } ] }`.
+- **POST `/api/ExerciseLibrary/_listExercises`**  
+  Optional `includeDeprecated`. → `{ "results": [ ...exercises... ] }`.
+- **POST `/api/ExerciseLibrary/_listProposals`**  
+  Optional `status`. → `{ "results": [ ...proposals... ] }`.
+- **POST `/api/ExerciseLibrary/_getProposalsForExercise`**  
+  Fields: `exercise`. → `{ "results": [ ...proposals... ] }`.
+
+---
+
+## CheckIn
+
+### Session Routes
+- **POST `/api/CheckIn/submit`**  
+  Request `{ "session": "string", "date": "YYYY-MM-DD", "completedItems": ["ID"], "strain_0_10": 0, "pain_0_10": 0, "comment": "string|null" }`  
+  Response `{ "checkin": "ID" }`.
+- **POST `/api/CheckIn/amend`**  
+  Request `{ "session": "string", "checkin": "ID", ...optional fields... }` → Response `{}`.
+- **POST `/api/CheckIn/_getCheckInByOwnerAndDate`**  
+  Request `{ "session": "string", "date": "YYYY-MM-DD" }` → `{ "results": [ { ...checkin... } ] }`.
+- **POST `/api/CheckIn/_getCheckInsByOwner`**  
+  Request `{ "session": "string" }` → `{ "results": [ { ...checkin... } ] }`.
+- **POST `/api/CheckIn/_getCheckInById`**  
+  Request `{ "session": "string", "checkin": "ID" }` → `{ "results": [ { ...checkin... } ] }`.
+- **POST `/api/CheckIn/_hasCheckIn`**  
+  Request `{ "session": "string", "date": "YYYY-MM-DD" }` → `{ "results": [ { "has": true } ] }`.
+
+### Share-Link Route
+- **POST `/api/CheckIn/_getCheckInsByOwner`**  
+  Request `{ "shareToken": "string" }` → `{ "results": [ { ...checkin... } ] }`. Errors: `invalid_share_token`, `share_link_expired`.
+
+---
+
+## RehabPlan
+
+### Session Routes
+- **POST `/api/RehabPlan/createPlan`**  
+  Request `{ "session": "string" }` → `{ "plan": "ID" }`.  
+  Behavior: Idempotent. If an active plan already exists for the owner, returns the existing plan id (no error).
+- **POST `/api/RehabPlan/addPlanItem`**  
+  Request `{ "session": "string", "plan": "ID", "exercise": "ID", "perWeek": 0, "sets": 0, "reps": 0, "notes": "string" }` → `{}`.
+- **POST `/api/RehabPlan/removePlanItem`**  
+  Request `{ "session": "string", "plan": "ID", "exercise": "ID" }` → `{}`.
+- **POST `/api/RehabPlan/archivePlan`**  
+  Request `{ "session": "string", "plan": "ID" }` → `{}`.
+- **POST `/api/RehabPlan/_getActivePlanByOwner`**  
+  Request `{ "session": "string" }` → `{ "results": [ { ...plan... } ] }`.
+- **POST `/api/RehabPlan/_getPlanById`**  
+  Request `{ "session": "string", "plan": "ID" }` → `{ "results": [ { ...plan... } ] }`.
+
+### Share-Link Route
+- **POST `/api/RehabPlan/_getPlanById`**  
+  Request `{ "shareToken": "string", "plan": "ID" }` → `{ "results": [ { ...plan... } ] }`.  
+  Errors: `invalid_share_token`, `share_link_expired`.
+
+---
+
+## Feedback
+
+### Session Routes
+- **POST `/api/Feedback/recordCompletion`**  
+  Request `{ "session": "string", "date": "YYYY-MM-DD", "completedAll": true }` → `{ "summaryId": "ID", "streakCount": 0, "completion7d": 0.0 }`.
+- **POST `/api/Feedback/_getSummaryMetrics`**  
+  Request `{ "session": "string" }` → `{ "results": [ { "streakCount": 0, "completion7d": 0.0 } ] }`.
+- **POST `/api/Feedback/_hasSentReminderToday`**  
+  Request `{ "session": "string", "date": "YYYY-MM-DD" }` → `{ "results": [ { "sent": false } ] }` (requires valid date).
+- **POST `/api/Feedback/_listMessages`**  
+  Request `{ "session": "string" }` → `{ "results": [ { "_id": "ID", "timestamp": "ISO-8601", "kind": "...", "text": "..." } ] }`.
+- **POST `/api/Feedback/sendReminder`**  
+  Request `{ "session": "string", "owner": "ID" }` → `{}`.  
+  Authorization: allowed for the `owner` or any admin. Error: `{ "error": "forbidden" }` if neither.
+
+### Admin Session Routes
+- **POST `/api/Feedback/recompute`**  
+  Request `{ "session": "string", "owner": "ID", "today": "YYYY-MM-DD", "newStreakCount": 0, "newCompletion7d": 0.0 }` → `{ "summaryId": "ID", ... }`.
+- **POST `/api/Feedback/recordMessage`**  
+  Request `{ "session": "string", "owner": "ID", "kind": "reminder|motivation|summary", "text": "string" }` → `{ "messageId": "ID" }`.
+
+### Share-Link Route
+- **POST `/api/Feedback/_getSummaryMetrics`**  
+  Request `{ "shareToken": "string" }` → `{ "results": [ { "streakCount": 0, "completion7d": 0.0 } ] }`.
+
+---
+
+## LikertSurvey (Public)
+The LikertSurvey concept remains exposed via passthrough routes. No session token is required.
+
+- **POST `/api/LikertSurvey/createSurvey`**  
+  Request `{ "author": "ID", "title": "string", "scaleMin": 1, "scaleMax": 5 }` → `{ "survey": "ID" }`.
+- **POST `/api/LikertSurvey/addQuestion`**  
+  Request `{ "survey": "ID", "text": "string" }` → `{ "question": "ID" }`.
+- **POST `/api/LikertSurvey/submitResponse`**  
+  Request `{ "respondent": "ID", "question": "ID", "value": 3 }` → `{}`.
+- **POST `/api/LikertSurvey/updateResponse`**  
+  Request `{ "respondent": "ID", "question": "ID", "value": 4 }` → `{}`.
+- **POST `/api/LikertSurvey/_getSurveyQuestions`**  
+  Request `{ "survey": "ID" }` → `{ "results": [ { "_id": "ID", "text": "string" } ] }`.
+- **POST `/api/LikertSurvey/_getSurveyResponses`**  
+  Request `{ "survey": "ID" }` → `{ "results": [ { "_id": "ID", "respondent": "ID", "question": "ID", "value": 3 } ] }`.
+- **POST `/api/LikertSurvey/_getRespondentAnswers`**  
+  Request `{ "respondent": "ID" }` → `{ "results": [ { "_id": "ID", "question": "ID", "value": 2 } ] }`.
+
+---
+
+## Request Flow Summary
+1. The frontend sends a `POST` request to `/api/...` with the appropriate payload.
+2. If `session` or `shareToken` is supplied, the backend validates it via `UserAccount` queries.
+3. On success, the response contains either a JSON object or `{ "results": [...] }`.
+4. On failure, the response is `{ "error": "..." }`; check the table above for common values.
