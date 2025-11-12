@@ -1,67 +1,154 @@
-# Whats New
-- ExerciseLibrary
-  - Admin-gated mutations (actorIsAdmin required for add/update/deprecate/propose/apply/discard).
-  - AI augmentation restored: proposeDetails always calls Gemini using server key; removed user overrides.
-  - Switched to Google’s official @google/generative-ai SDK; added testable LLM client stub.
-  - Proposal response now returns details to the UI immediately; exercise remains unchanged until apply.
-  - Removed recommendedFreq from the library (frequency now belongs in RehabPlan plan items).
-  - Safer applyDetails: null videoUrl clears the field; robust JSON/code-fence parsing and validation.
+## Final Design Summary (Assignment 4c)
 
+### Differences vs A2 and A4b
+- From A2 (initial concept design) to now
+  - Moved orchestration and access control from the frontend to backend synchronizations.
+  - Replaced implicit flows with explicit guards (session, admin, share-link) in `where` clauses.
+  - Clarified ownership/actor bindings (e.g., CheckIn binds `owner` and `actor` from the session user).
+- From A4b (visual design) to now
+  - Frontend adopted the new API contract: always sends `session`/`shareToken`, unwraps `{ results: [...] }`, and handles standardized errors.
+  - Polished day view selector and reminder affordances; owner-allowed reminders; improved loading/error states.
+- Immutable snapshots (reference)
+  - Initial concept snapshot: `context/design/background/concept-specifications.md/20251007_212711.f76391f1.md`
+  - Visual design snapshot: `context/design/background/implementing-concepts.md/20251007_212719.9b6039ea.md`
+  - API context snapshot: `context/deno.json/20251028_005306.c2732493.md`
+
+### Purpose
+Bring backend authentication/authorization into syncs, stabilize the API contract for the frontend, harden sensitive routes, and deploy a working, documented app that aligns with the rubric.
+
+---
+
+### Architecture: Request-driven syncs
+- `Requesting` concept starts the server and turns “excluded” HTTP routes into `Requesting.request` actions. Syncs match those actions, perform guards/queries (in a `where` clause), and respond via `Requesting.respond`.
+- Passthrough policy (see `src/concepts/Requesting/passthrough.ts`):
+  - Public, non-sensitive routes are explicitly included.
+  - Sensitive routes (mutations, owner data, admin-only reads) are excluded and handled by syncs.
+- Auth patterns (now consistent across concepts):
+  - Session validation: `UserAccount._getUserByToken`.
+  - Admin validation: `UserAccount._isAdmin`.
+  - Share-link validation: `UserAccount._resolveShareLink` (and expiry checks).
+  - Responses always bind required variables before `Requesting.respond` to avoid missing bindings.
+
+---
+
+### API contract updates
+Source of truth: `design/api/backend.api.md` (kept in sync with backend).
+- Authentication inputs:
+  - `session`: required for protected routes; obtained via `/UserAccount/login`.
+  - `shareToken`: for read-only sharing without a session.
+- Response shapes:
+  - Actions: flat objects (e.g., `{ "plan": "ID" }` or `{}`).
+  - Queries: `{ "results": [...] }` (never `[undefined]`).
+  - Errors: `{ "error": "unauthenticated" | "forbidden" | "invalid_share_token" | "share_link_expired" | "invalid_date" }`.
+- Two notable behavior changes the frontend depends on:
+  - `POST /api/RehabPlan/createPlan` is idempotent; it returns the existing plan id instead of erroring if a plan already exists.
+  - `POST /api/Feedback/sendReminder` is allowed for the owner or any admin (previously treated as admin-only).
+
+---
+
+### Key design choices & rationale
+- Move auth to backend syncs (instead of FE-enforced)
+  - Why: eliminates client-side trust assumptions; expresses security as declarative guards; keeps flows co-located with concept logic.
+  - Alternative rejected: keep FE-only checks (fragile; easy to bypass; duplicated logic).
+- Normalize responses and errors
+  - `{ results: [...] }` for queries and a small, explicit error set avoids undefined arrays and fragile FE conditionals.
+  - Alternative: passthrough raw concept arrays and heterogeneous error shapes (harder FE, more coupling).
+- Idempotent RehabPlan.createPlan
+  - Choice: on “already has an active plan,” return the existing id (no error).
+  - Rationale: removes a noisy FE race/branch; models “ensure exists” semantics.
+- Owner-allowed Feedback.sendReminder (admin still allowed)
+  - Choice aligns with the user journey (self-reminders), while preserving admin tooling.
+  - Alternative (admin-only) rejected as overly restrictive for core flow.
+- ExerciseLibrary admin gating and AI flow
+  - Admin-only mutations; proposal stage returns preview details without mutating exercise; apply/discard require admin.
+  - Uses official `@google/generative-ai` SDK with a testable stub; robust parsing and `null` videoUrl clears the field.
+  - Rationale: preserves editorial control; safe/traceable AI augmentation.
+- Share-link scope and expiry
+  - Read-only via `shareToken`, with strict expiry checks; no mutations permitted with tokens.
+  - Rationale: safe sharing without account creation; minimized blast radius.
+- Path/payload leniency to avoid timeouts
+  - Accept both `proposal` or `proposalId` for apply/discard; `_listProposals` works with or without `status`.
+  - Rationale: tolerate client variance; ensure a Requesting.respond always fires (no 10s timeouts).
+- CORS + request tracing
+  - Enabled Hono CORS for the FE origin; kept flow-by-flow log traces to aid debugging and demo trace capture.
+
+---
+
+### Concept-specific decisions
 - UserAccount
-  - register supports isAdmin (default false); login/logout/_isSignedIn implemented.
-  - Share Links made useful: added queries
-    - _listShareLinks (owner) → [{ shareLink, token, expiry, expired }]
-    - _resolveShareLink (token) → [{ owner, ownerUsername, expiresAt, expired }]
-
+  - Routes requiring a session are explicitly guarded in syncs; admin checks done only where needed.
+  - Share-link lifecycle handled via `createShareLink`/`revokeShareLink` and `_listShareLinks`.
 - CheckIn
-  - Authorization added: submit/amend require actor = owner.
-  - Query _hasCheckIn(owner, date) added for reminder flows.
-
+  - Mutations (`submit`, `amend`) require session; owner derived from session and bound as both `actor` and `owner`.
+  - Owner queries accept `session`; shared read-only list accepts `shareToken` with expiry checks.
 - RehabPlan
-  - Owner authorization enforced on createPlan/addPlanItem/removePlanItem/archivePlan.
-  - Queries added: _getActivePlanByOwner and _getPlanById.
-
+  - `createPlan` made idempotent; if an active plan exists, return it.
+  - Owner queries accept `session`; read-only access by `shareToken` validates owner + expiry.
+- ExerciseLibrary
+  - All mutations and select reads are admin-only. Syncs enforce admin via `_isAdmin` (derived from session).
+  - Query responses normalized to `{ results: [...] }` (no `undefined` entries).
 - Feedback
-  - Added _listMessages(owner) to inspect reminders/motivations.
-  - New recordCompletion(owner, date, completedAll) action auto-updates streaks and 7‑day completion window.
-  - Summary state extended with lastCompletedDate and recentCompletedDates.
+  - `recordCompletion`/metrics/messages require session.
+  - `sendReminder` allowed for owner or admin; rejects otherwise with `forbidden`.
+  - Share-link path for summary metrics remains read-only and expiry-gated.
 
-- Server & Platform
-  - CORS enabled via Hono middleware for frontend integration.
-  - deno.json task now loads .env automatically (--env-file=.env) for GEMINI_API_KEY/GEMINI_MODEL.
-  - Dynamic endpoint loader excludes internal helper functions from public API.
+---
 
-- API & Docs
-  - design/api/backend.api.md updated for all changes above, including ExerciseLibrary.proposeDetails shape and new UserAccount/Feedback endpoints.
+### Security and authorization summary
+- All sensitive routes are excluded from passthrough and validated in `where` clauses.
+- Sessions are validated server-side before any mutation or owner-specific read.
+- Admin checks are centralized and consistent; no reliance on frontend flags.
+- Share links cannot access mutations and are rejected if invalid or expired.
 
-- Tests
-  - Comprehensive updates across concepts: admin gating, owner checks, LLM stubbed flows, proposal apply/discard, share-link listing/resolution, and feedback streak progression. All tests pass.
+---
 
-# Interesting moments:
+### Frontend changes required (completed)
+- Include `session` (or `shareToken`) in bodies for protected/read-only routes per `design/api/backend.api.md`.
+- Unwrap query data from `{ results: [...] }` and handle the standardized error codes.
+- Use idempotent `createPlan` behavior (don’t retry-loop on prior-plan errors), and allow owner to send reminders.
+
+---
+
+### Verification (deployment + trace)
+- Deployed on Render (Deno + MongoDB). Environment: `MONGODB_URL`, `DB_NAME`, `PORT`.
+- Observability: Render logs provide the action trace used in the demo submission.
+
+---
+
+### Evidence and testing (summary)
+- Concept tests (`deno test -A`) validate core behaviors across concepts (admin gating, owner checks, proposal apply/discard, share-links, feedback streaks).
+- Manual end-to-end runs validate:
+  - Session vs. admin vs. share-token access patterns.
+  - Day view selector, plan creation/idempotency, reminder flows, AI proposal → apply/discard path.
+
+---
+
+### Interesting moments (selected)
+- Optional parameters vs. spec (CheckIn.amend)
+  - Implementation suggested optional `strain_0_10`/`pain_0_10`; this matched real use and we updated the spec accordingly.
+  - Reference: `design/concepts/checkin/implementation.md` and `context/design/concepts/checkin/test.md/steps/response.4d78370b.md`.
+- Prompting quality shaped outcomes (RehabPlan outline)
+  - A vague prompt yielded near-complete code; a precise “skeleton only, with docstrings” prompt produced the intended outline.
+  - Reference: `context/design/brainstorming/RehabPlan/implementation_outline.md/steps/response.ef94f105.md`.
+- Test structuring trade-off
+  - One large test vs. many focused tests: we favored focused cases for clearer failure signals and coverage mapping.
+  - Reference: `context/design/concepts/feedback/test.md/steps/response.ee41c1c0.md`.
+
+---
+
+### Rationale and impact
+- Moving orchestration to syncs makes auth reliable and declarative, removing scattered frontend logic and ensuring the backend owns security decisions.
+- Standardizing responses and errors simplifies frontend data handling and reduces edge-case failures.
+- Idempotent `createPlan` improves UX and robustness; owner-enabled reminders better match real usage.
+
+---
+
+### Pointers
+- Backend API contract:
+  - `design/api/backend.api.md`
+- Request routing notes:
+  - `design/api/request-routing.md`
+- Sync implementations:
+  - `src/syncs/` (CheckIn, RehabPlan, ExerciseLibrary, Feedback, UserAccount)
 
 
-## Optional params
-
-[@original-implementation](../../../design/concepts/checkin/implementation.md)
-
-The LLM implemented my ammend function with optional strain and pain parameters (lines 119-120 above), but they were required in my spec. This made me realize they probably should be optional as the purpose is to change an existing checkin, and a user may want to keep these the same. I like the way it corrected that for me, but it could potentially be concerning that it did not follow directions as the implementation does not match the spec.However, in this case, I changed the spec to match the implementation afte rgiving it some thought. 
-
-## re-assigning a const
-gemini flash gave me code that made a const ID, didnt use it, then a few lines later tried to re-assign it
-[Comprehensive CheckIn concept test suite →](context/design/concepts/checkin/test.md/steps/response.4d78370b.md)
-
-
-## testing 
-2.5 pro gave each test area its own deno.test, 2.5 flash gave them all as one deno.test with multiple steps
-[See test suite and methodology ↗](context/design/concepts/feedback/test.md/steps/response.ee41c1c0.md)
-
-
-## outline
-I asked for an outline of my RehabPlan class with the prompt: "make an outline for my RehabPlan concept implementation according to my specification", and I did not get what I was looking for, I got an almost completed implementation. I asked again in a new file (with the same context as before) with the prompt: "I would like an outline of a implementation for RehabPlan from the given specification. Don't implement any functions yet, but give a skeleton of the class with good documentation and docstrings for any functions I need." This time, I got exactly what I was looking for, skeleton code of my concept with clear TODO comments of what I needed to implement. It was interesting to see how a more detailed prompt gave me much better results
-[Implementation outline for RehabPlan →](context/design/brainstorming/RehabPlan/implementation_outline.md/steps/response.ef94f105.md)
-
-
-
-## too much
-I asked to implement 1 function, and it did, but gave me back the entire code; seems like a waste of output tokens. It did this twice.
-[CreatePlan action implementation example →](context/design/concepts/RehabPlan/implementation.md/steps/response.86fcae83.md)
